@@ -1,8 +1,8 @@
 import os, sys
 
-os.system("python3 -m pip install -e segment_anything")
-os.system("python3 -m pip install -e GroundingDINO")
-os.system("pip3 install diffusers transformers accelerate scipy safetensors")
+#os.system("python3 -m pip install -e segment_anything")
+#os.system("python3 -m pip install -e GroundingDINO")
+#os.system("pip3 install diffusers transformers accelerate scipy safetensors")
 
 sys.path.append(os.path.join(os.getcwd(), "GroundingDINO"))
 
@@ -59,7 +59,7 @@ groundingdino_model = load_model_hf(ckpt_repo_id, ckpt_filenmae, ckpt_config_fil
 
 """# Load SAM model"""
 
-os.system("wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth")
+#os.system("wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth")
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -121,13 +121,14 @@ masks, _, _ = sam_predictor.predict_torch(
             boxes = transformed_boxes,
             multimask_output = False,
         )
-
+"""
 def show_mask(mask, image, random_color=True):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.8])], axis=0)
     else:
         color = np.array([30/255, 144/255, 255/255, 0.6])
     h, w = mask.shape[-2:]
+    mask = mask.cpu()
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
 
     annotated_frame_pil = Image.fromarray(image).convert("RGBA")
@@ -138,4 +139,8 @@ def show_mask(mask, image, random_color=True):
 annotated_frame_with_mask = show_mask(masks[0][0], annotated_frame)
 
 img = Image.fromarray(annotated_frame_with_mask)
-img.save('assets/inpaint_demo_output.jpg')
+img.save('assets/inpaint_demo_output.png')
+"""
+image_mask = masks[0][0].cpu().numpy()
+print(f"Image mask shape: {image_mask.shape}")
+print(f"Original image size: {image_source.shape}")
