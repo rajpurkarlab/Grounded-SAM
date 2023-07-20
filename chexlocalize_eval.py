@@ -72,7 +72,7 @@ def chexlocalize_eval():
 
     # compute mIoU by class and save to json
     mIoU_classes = {}
-    for class_name in class_names:
+    for class_name in PROMPTS:
         mIoU_classes[class_name] = np.mean(iou_results[class_name])
     mIoU_classes['mIoU'] = mIoU
     json.dump(mIoU_classes, open('chexlocalize_miou.json', 'w'))
