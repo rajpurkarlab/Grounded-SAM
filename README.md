@@ -1,4 +1,4 @@
-### Grounded-SAM
+# Grounded-SAM
 
 ## Preliminary Works
 
