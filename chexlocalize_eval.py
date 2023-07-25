@@ -5,17 +5,23 @@ import argparse
 import sys
 import numpy as np
 
-from grounded_sam import run_grounded_sam, env_setup, load_models
+MODEL = "BioViL" # "Grounded-SAM"
+GRADCAM = True
+
+print(MODEL, GRADCAM)
+
+# from grounded_sam import run_grounded_sam, env_setup, load_models
+from models.baselines import run_biovil
 
 PROMPTS = { # Baseline prompts
     "Enlarged Cardiomediastinum": "Findings suggesting enlarged cardiomediastinum", 
     "Cardiomegaly": "Findings suggesting cardiomegaly", 
     "Edema": "Findings suggesting an edema",
-    "Lung Lesion": "Lung lesion", 
-    "Airspace Opacity": "Airspace opacity",
+    "Lung Lesion": "Findings suggesting lung lesion", 
+    "Airspace Opacity": "Findings suggesting airspace opacity",
     "Consolidation": "Findings suggesting consolidation",
     "Atelectasis": "Findings suggesting atelectasis",
-    "Pneumothorax": "Pneumothorax",
+    "Pneumothorax": "Findings suggesting pneumothorax",
     "Pleural Effusion": "Findings suggesting pleural effusion",
     "Support Devices": "Support devices" 
 }
@@ -27,8 +33,8 @@ def get_iou(pred_mask, gt_mask):
     return iou_score
 
 def chexlocalize_eval():
-    env_setup()
-    groundingdino_model, sam_predictor = load_models()
+    # env_setup()
+    # groundingdino_model, sam_predictor = load_models()
 
     # Evaluation
     iou_results = {prompt: [] for prompt in PROMPTS}
@@ -50,8 +56,17 @@ def chexlocalize_eval():
                 text_prompt = PROMPTS[query]
 
                 try:
-                    pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
-                    pred_mask = (pred_mask != 0).astype(int)
+                    if MODEL == "Grounded-SAM":
+                        # pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
+                        # pred_mask = (pred_mask != 0).astype(int)
+                        pass
+                    elif MODEL == "BioViL":
+                        if GRADCAM:
+                            pred_mask = run_biovil(filename, text_prompt, gradcam=True)
+                        else:
+                            pred_mask = run_biovil(filename, text_prompt)
+                    else:
+                        raise ModuleNotFoundError("Only Grounded-SAM, BioViL allowed")
 
                     # compute iou
                     iou_score = get_iou(pred_mask, gt_mask)
@@ -75,7 +90,8 @@ def chexlocalize_eval():
     for class_name in PROMPTS:
         mIoU_classes[class_name] = np.mean(iou_results[class_name])
     mIoU_classes['mIoU'] = mIoU
-    json.dump(mIoU_classes, open('chexlocalize_miou.json', 'w'))
+    # FNAME = ""
+    json.dump(mIoU_classes, open('chexlocalize_biovil_gradcam_miou.json', 'w'))
     
     return mIoU
 
