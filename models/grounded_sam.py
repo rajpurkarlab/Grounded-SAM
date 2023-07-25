@@ -10,13 +10,14 @@ def env_setup():
     # If you have multiple GPUs, you can set the GPU to use here.
     # The default is to use the first GPU, which is usually GPU 0.
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+env_setup()
 
 # Grounding DINO
-from GroundingDINO.groundingdino.models import build_model
-from GroundingDINO.groundingdino.util import box_ops
-from GroundingDINO.groundingdino.util.slconfig import SLConfig
-from GroundingDINO.groundingdino.util.utils import clean_state_dict
-from GroundingDINO.groundingdino.util.inference import annotate, load_image, predict
+from .GroundingDINO.groundingdino.models import build_model
+from .GroundingDINO.groundingdino.util import box_ops
+from .GroundingDINO.groundingdino.util.slconfig import SLConfig
+from .GroundingDINO.groundingdino.util.utils import clean_state_dict
+from .GroundingDINO.groundingdino.util.inference import annotate, load_image, predict
 
 from segment_anything import build_sam, SamPredictor
 
