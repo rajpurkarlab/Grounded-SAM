@@ -59,7 +59,10 @@ def chexlocalize_eval():
                     pred_mask = run_biovil(filename, text_prompt)
                 
                 # compute iou
-                iou_score = get_iou(pred_mask, gt_mask)
+                try:
+                    iou_score = get_iou(pred_mask, gt_mask)
+                except:
+                    iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
 
                 print(filename, text_prompt, iou_score)
 

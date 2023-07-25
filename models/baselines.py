@@ -2,10 +2,9 @@ from PIL import Image
 import numpy as np
 from pathlib import Path
 import torch
+import open_clip
 
 from .gradcam import get_gradcam_map_biovil #, get_gradcam_map_bmclip, get_gradcam_map_chexzero
-
-# from BioViL.text
 
 from .BioViL.text import get_cxr_bert_inference
 from .BioViL.image import get_biovil_resnet_inference
@@ -22,8 +21,15 @@ image_text_inference = ImageTextInferenceEngine(
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 image_text_inference.to(device)
 
-# def run_biomed_clip(img_path, text_prompt): # gradcam always used
-#     return get_gradcam_map_bmclip(img_path, text_prompt, np.array(Image.open(img_path).size))
+def load_biomed_clip(device):
+    model, preprocess_train, preprocess_val = open_clip.create_model_and_transforms('hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224')
+    tokenizer = open_clip.get_tokenizer('hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224')
+    model.to(device)
+    return model, tokenizer, preprocess_train, preprocess_val
+
+def run_biomed_clip(img_path, text_prompt):
+    model, tokenizer, preprocess_train, preprocess_val = load_biomed_clip(device)
+    # Using `model`, compute similarity grid between embeddings of `img_path` and `text_prompt`
 
 def run_biovil(img_path, text_prompt, gradcam=False):
     if gradcam:
@@ -37,5 +43,4 @@ def run_biovil(img_path, text_prompt, gradcam=False):
     )
     return similarity_map
 
-# def run_chexzero(img_path, text_prompt): # gradcam always used
-#     return get_gradcam_map_bmclip(img_path, text_prompt, np.array(Image.open(img_path).size))
+# def run_chexzero(img_path, text_prompt):
