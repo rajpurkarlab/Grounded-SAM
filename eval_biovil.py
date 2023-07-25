@@ -7,7 +7,6 @@ import numpy as np
 
 GRADCAM = True
 
-# from grounded_sam import run_grounded_sam, env_setup, load_models
 from models.baselines import run_biovil
 
 PROMPTS = { # Baseline prompts
@@ -30,9 +29,6 @@ def get_iou(pred_mask, gt_mask):
     return iou_score
 
 def chexlocalize_eval():
-    # env_setup()
-    # groundingdino_model, sam_predictor = load_models()
-
     # Evaluation
     iou_results = {prompt: [] for prompt in PROMPTS}
 
@@ -52,7 +48,6 @@ def chexlocalize_eval():
 
                 text_prompt = PROMPTS[query]
 
-                # try:
                 if GRADCAM:
                     pred_mask = run_biovil(filename, text_prompt, gradcam=True)
                 else:
@@ -67,8 +62,6 @@ def chexlocalize_eval():
                 print(filename, text_prompt, iou_score)
 
                 iou_results[query].append(iou_score)
-                # except:
-                #     print(f"\nSkipping {filename}, {text_prompt} due to errors\n")
     
     # Compute and print pathology-specific mIoUs
     total_sum = 0
@@ -84,7 +77,7 @@ def chexlocalize_eval():
         mIoU_classes[class_name] = np.mean(iou_results[class_name])
     mIoU_classes['mIoU'] = mIoU
     # FNAME = ""
-    json.dump(mIoU_classes, open('chexlocalize_biovil_gradcam.json', 'w'))
+    json.dump(mIoU_classes, open('chexlocalize_biovil_gradcam_plus.json', 'w'))
     
     return mIoU
 

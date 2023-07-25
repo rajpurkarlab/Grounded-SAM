@@ -119,7 +119,7 @@ class Hook:
     def gradient(self) -> torch.Tensor:
         return self.data.grad
 
-def gradCAM(model, input, target, layer, input_size, gradcam_plus=False) -> torch.Tensor:
+def gradCAM(model, input, target, layer, input_size, gradcam_plus=True) -> torch.Tensor:
     """
     Compute Grad-CAM or Grad-CAM+ heatmap for a given input and target at a given layer.
 
@@ -181,91 +181,6 @@ def gradCAM(model, input, target, layer, input_size, gradcam_plus=False) -> torc
         
     return gradcam
 
-# def get_gradcam_map_bmclip(image_path, image_caption, input_size):
-#     """
-#     Compute Grad-CAM or Grad-CAM+ heatmap for a given image and caption.
-
-#     Parameters:
-#         image_path (str): path to image
-#         image_caption (str): caption for image
-#         input_size (int): size of input
-#         gradcam_plus (bool): whether to use Grad-CAM+ (clamp gradients) or not
-#         seg_targets (list): list of anatomical structures to compute Grad-CAM at
-    
-#     Returns:
-#         map (np.ndarray): Grad-CAM or Grad-CAM+ heatmap
-#     """
-
-#     """
-#     TODO: Load BiomedCLIP ResNet-50-224-GPT/77
-#     """
-
-#     saliency_layer = "layer4" # We record gradients at layer 4, the last layer of the ResNet encoder before attention pooling
-
-#     origimg = np.array(Image.open(image_path).convert('L')) # Load original image
-
-#     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-#     # Preprocess image for phrase grounding
-#     image_input = image_inference.transform(Image.fromarray(origimg)).unsqueeze(0).to(device)
-#     image_np = load_image(image_path, input_size[0])
-
-#     attn_map = gradCAM( # Compute Grad-CAM or Grad-CAM+ heatmap
-#         image_inference.model.to(device),
-#         image_input.to(device),
-#         text_inference.get_embeddings_from_prompt(image_caption).float().to(device),
-#         getattr(image_inference.model.encoder.encoder, saliency_layer),
-#         input_size,
-#         gradcam_plus
-#     )
-#     attn_map = attn_map.squeeze().detach().cpu().numpy()
-#     map = getAttMap(image_np, attn_map, blur=True)
-    
-#     return map
-
-
-# def get_gradcam_map_chexzero(image_path, image_caption, input_size):
-#     """
-#     Compute Grad-CAM or Grad-CAM+ heatmap for a given image and caption.
-
-#     Parameters:
-#         image_path (str): path to image
-#         image_caption (str): caption for image
-#         input_size (int): size of input
-#         gradcam_plus (bool): whether to use Grad-CAM+ (clamp gradients) or not
-#         seg_targets (list): list of anatomical structures to compute Grad-CAM at
-    
-#     Returns:
-#         map (np.ndarray): Grad-CAM or Grad-CAM+ heatmap
-#     """
-
-#     """
-#     TODO: Load CheXzero
-#     """
-
-#     saliency_layer = "layer4" # We record gradients at layer 4, the last layer of the ResNet encoder before attention pooling
-
-#     origimg = np.array(Image.open(image_path).convert('L')) # Load original image
-
-#     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-#     # Preprocess image for phrase grounding
-#     image_input = image_inference.transform(Image.fromarray(origimg)).unsqueeze(0).to(device)
-#     image_np = load_image(image_path, input_size[0])
-
-#     attn_map = gradCAM( # Compute Grad-CAM or Grad-CAM+ heatmap
-#         image_inference.model.to(device),
-#         image_input.to(device),
-#         text_inference.get_embeddings_from_prompt(image_caption).float().to(device),
-#         getattr(image_inference.model.encoder.encoder, saliency_layer),
-#         input_size,
-#         gradcam_plus
-#     )
-#     attn_map = attn_map.squeeze().detach().cpu().numpy()
-#     map = getAttMap(image_np, attn_map, blur=True)
-    
-#     return map
-
 def get_gradcam_map_biovil(image_path, image_caption, input_size):
     """
     Compute Grad-CAM or Grad-CAM+ heatmap for a given image and caption.
@@ -301,7 +216,7 @@ def get_gradcam_map_biovil(image_path, image_caption, input_size):
         text_inference.get_embeddings_from_prompt(image_caption).float().to(device),
         getattr(image_inference.model.encoder.encoder, saliency_layer),
         input_size,
-        gradcam_plus=False
+        gradcam_plus=True
     )
     attn_map = attn_map.squeeze().detach().cpu().numpy()
     map = getAttMap(image_np, attn_map, blur=True)
