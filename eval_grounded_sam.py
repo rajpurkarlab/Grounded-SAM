@@ -5,13 +5,9 @@ import argparse
 import sys
 import numpy as np
 
-MODEL = "BioViL" # "Grounded-SAM"
 GRADCAM = True
 
-print(MODEL, GRADCAM)
-
-# from grounded_sam import run_grounded_sam, env_setup, load_models
-from models.baselines import run_biovil
+from models.grounded_sam import run_grounded_sam, env_setup, load_models
 
 PROMPTS = { # Baseline prompts
     "Enlarged Cardiomediastinum": "Findings suggesting enlarged cardiomediastinum", 
@@ -33,8 +29,8 @@ def get_iou(pred_mask, gt_mask):
     return iou_score
 
 def chexlocalize_eval():
-    # env_setup()
-    # groundingdino_model, sam_predictor = load_models()
+    env_setup()
+    groundingdino_model, sam_predictor = load_models()
 
     # Evaluation
     iou_results = {prompt: [] for prompt in PROMPTS}
@@ -56,18 +52,9 @@ def chexlocalize_eval():
                 text_prompt = PROMPTS[query]
 
                 try:
-                    if MODEL == "Grounded-SAM":
-                        # pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
-                        # pred_mask = (pred_mask != 0).astype(int)
-                        pass
-                    elif MODEL == "BioViL":
-                        if GRADCAM:
-                            pred_mask = run_biovil(filename, text_prompt, gradcam=True)
-                        else:
-                            pred_mask = run_biovil(filename, text_prompt)
-                    else:
-                        raise ModuleNotFoundError("Only Grounded-SAM, BioViL allowed")
-
+                    pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
+                    pred_mask = (pred_mask != 0).astype(int)
+                    
                     # compute iou
                     iou_score = get_iou(pred_mask, gt_mask)
 
@@ -91,7 +78,7 @@ def chexlocalize_eval():
         mIoU_classes[class_name] = np.mean(iou_results[class_name])
     mIoU_classes['mIoU'] = mIoU
     # FNAME = ""
-    json.dump(mIoU_classes, open('chexlocalize_biovil_gradcam_miou.json', 'w'))
+    json.dump(mIoU_classes, open('chexlocalize_grounded_sam.json', 'w'))
     
     return mIoU
 
