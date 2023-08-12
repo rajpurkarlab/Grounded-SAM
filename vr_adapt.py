@@ -111,7 +111,7 @@ def compute_loss(batch, pathologies, groundingdino, sam, biomedclip, tokenizer, 
         bmt = []
         si = []
         gdi = []
-        gdt = []
+        # gdt = []
         
         with torch.no_grad():
             sam_img_emb = sam.image_encoder(preprocess_sam(sam, image_path))[0][0]
@@ -138,12 +138,10 @@ def compute_loss(batch, pathologies, groundingdino, sam, biomedclip, tokenizer, 
     bmi = torch.stack(bmi)
     bmt = torch.stack(bmt)
     si = torch.stack(si)
-    gdi1 = torch.stack(gdi1)
-    gdi2 = torch.stack(gdi2)
-    gdi3 = torch.stack(gdi3)
-    gdt = torch.stack(gdt)
+    gdi = torch.stack(gdi)
+    # gdt = torch.stack(gdt)
     
-    print(bmi.shape, bmt.shape, si.shape, gdi1.shape, gdi2.shape, gdi3.shape, gdt.shape)
+    print(bmi.shape, bmt.shape, si.shape, gdi.shape) #gdt.shape
     
     loss_sam = 0
     loss_groundingdino_img = 0
