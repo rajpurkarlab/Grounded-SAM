@@ -16,7 +16,7 @@ termcolor
 timm
 torch
 torchvision
-transformers
+transformers==4.30.2
 yapf
 nltk
 fairscale

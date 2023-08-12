@@ -133,3 +133,6 @@ dmypy.json
 outputs/
 
 .idea/
+
+*.json
+datasets/*
