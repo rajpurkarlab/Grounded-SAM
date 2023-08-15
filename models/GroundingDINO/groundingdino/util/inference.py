@@ -14,6 +14,8 @@ from groundingdino.util.misc import clean_state_dict
 from groundingdino.util.slconfig import SLConfig
 from groundingdino.util.utils import get_phrases_from_posmap
 
+import torchvision.transforms as S
+
 # ----------------------------------------------------------------------------------------------------------------------
 # OLD API
 # ----------------------------------------------------------------------------------------------------------------------
@@ -37,16 +39,17 @@ def load_model(model_config_path: str, model_checkpoint_path: str, device: str =
 
 
 def load_image(image_path: str) -> Tuple[np.array, torch.Tensor]:
-    transform = T.Compose(
+    transform = S.Compose(
         [
-            T.RandomResize([800], max_size=1333),
-            T.ToTensor(),
-            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            # T.RandomResize([800], max_size=1333),
+            S.CenterCrop(800),
+            S.ToTensor(),
+            S.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]
     )
     image_source = Image.open(image_path).convert("RGB")
     image = np.asarray(image_source)
-    image_transformed, _ = transform(image_source, None)
+    image_transformed = transform(image_source)
     return image, image_transformed
 
 

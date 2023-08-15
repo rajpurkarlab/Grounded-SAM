@@ -1,12 +1,19 @@
+import warnings
+warnings.simplefilter("ignore")
+
 from models.grounded_sam import *
 from PIL import Image
 import cv2
 import open_clip
 from segment_anything.utils.transforms import ResizeLongestSide
 import torchvision
+from info_nce import InfoNCE
 
 from linear_probe import LinearProbe
 
+from models.GroundingDINO.groundingdino.models.GroundingDINO.bertwarper import (
+    generate_masks_with_special_tokens_and_transfer_map_nocate
+)
 from groundingdino.util.misc import (
     nested_tensor_from_tensor_list,
 )
@@ -54,106 +61,154 @@ def load_models():
     
     return groundingdino, sam, biomedclip, tokenizer, preprocess_train, preprocess_val
 
-def experiment():
-    groundingdino, sam, biomedclip, tokenizer, preprocess_train, preprocess_val = load_models()
-    
-    # Try an example with image and texts
-    image_path = "datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"
-    caption = "Lung lesion"
-   
-    # Get embeddings
-    samples = [preprocess_groundingdino_img(image_path)]
-    if isinstance(samples, (list, torch.Tensor)):
-        samples = nested_tensor_from_tensor_list(samples)
-    groundingdino_img_emb, _ = groundingdino.backbone(samples)
-
-    # groundingdino_txt_emb = groundingdino.bert(groundingdino.tokenizer(caption))
-    
-    with torch.no_grad():
-        sam_img_emb = sam.image_encoder(preprocess_sam(sam, image_path))[0][0]
-        img, txt = preprocess_biomedclip(preprocess_val, tokenizer, image_path, caption)
-        biomedclip_img_emb, biomedclip_txt_emb, _ = biomedclip(img, txt)
-    
-    print("\n====== GROUNDING-DINO")
-    print(len(groundingdino_img_emb))
-    for emb in groundingdino_img_emb:
-        # print(len(emb))
-        print(f"\t{emb.shape}")
-    # print(groundingdino_txt_emb.shape)
-    print("\n====== SAM")
-    print(sam_img_emb.shape)
-    print("\n====== BIOMED-CLIP")
-    print(biomedclip_img_emb.shape)
-    print(biomedclip_txt_emb.shape)
-
-"""
-func(batch of images (assume an attribute is pathology), all encoders, linear layers):
-    compute all embeddings for every img in batch, apply linear layers as needed -> output: bmi, bmt, si, gdi, gdt - dim: (batch_size, embedding_shape*) *same for all encoders
-    1) e.g. SAM
-    negative_mode='paired'
-    query: si
-    positive_key: bmi
-    negative_keys: for i in bmi: negative_keys = filter bmi to only include images of different pathology than i
-"""
-
-def compute_loss(batch, pathologies, groundingdino, sam, biomedclip, tokenizer, preprocess_train):
+def compute_loss(batch, pathologies, groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear):
     """
     batch: list of image paths
     pathologies: list of pathologies
     """
+    bmi = []
+    bmt = []
+    si = []
+    gdi = []
+    gdt = []
+
+    tokenized = groundingdino.tokenizer(pathologies, padding="max_length", max_length=195, return_tensors="pt")
+    (
+        text_self_attention_masks,
+        position_ids
+    ) = generate_masks_with_special_tokens_and_transfer_map_nocate(
+        tokenized, groundingdino.specical_tokens, groundingdino.tokenizer
+    )
+
+    if text_self_attention_masks.shape[1] > groundingdino.max_text_len:
+        text_self_attention_masks = text_self_attention_masks[
+            :, : groundingdino.max_text_len, : groundingdino.max_text_len
+        ]
+        position_ids = position_ids[:, : groundingdino.max_text_len]
+        tokenized["input_ids"] = tokenized["input_ids"][:, : groundingdino.max_text_len]
+        tokenized["attention_mask"] = tokenized["attention_mask"][:, : groundingdino.max_text_len]
+        tokenized["token_type_ids"] = tokenized["token_type_ids"][:, : groundingdino.max_text_len]
+
+    if groundingdino.sub_sentence_present:
+        tokenized_for_encoder = {k: v for k, v in tokenized.items() if k != "attention_mask"}
+        tokenized_for_encoder["attention_mask"] = text_self_attention_masks
+        tokenized_for_encoder["position_ids"] = position_ids
+    else:
+        tokenized_for_encoder = tokenized
+
+    bert_output = groundingdino.bert(**tokenized_for_encoder)  # bs, 195, 768
+    groundingdino_txt_emb = groundingdino.feat_map(bert_output["last_hidden_state"]).to(device)  # bs, 195, d_model
+    
+    for i in range(len(batch)):
+        emb = groundingdino_txt_emb[i, :][None, :]
+        gdt.append(groundingdino_txt_linear(emb).squeeze())
+     
     for i, image_path in enumerate(batch):
         samples = [preprocess_groundingdino_img(image_path)]
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         groundingdino_img_emb, _ = groundingdino.backbone(samples)
         
-        bmi = []
-        bmt = []
-        si = []
-        gdi = []
-        # gdt = []
-        
         with torch.no_grad():
+            # TODO: need to bring sam outside of torch.no_grad but may run into GPU issue.
             sam_img_emb = sam.image_encoder(preprocess_sam(sam, image_path))[0][0]
             img, txt = preprocess_biomedclip(preprocess_train, tokenizer, image_path, pathologies[i])
             biomedclip_img_emb, biomedclip_txt_emb, _ = biomedclip(img, txt)
-            bmi.append(biomedclip_img_emb.to(device))
-            bmt.append(biomedclip_txt_emb.to(device))
+            bmi.append(biomedclip_img_emb.to(device).squeeze())
+            bmt.append(biomedclip_txt_emb.to(device).squeeze())
         
         gd_img_emb = []
         for emb in groundingdino_img_emb:
             gd_img_emb.append(emb.tensors.to(device))
 
-        grounding_dino_linear = LinearProbe(gd_img_emb, biomedclip_img_emb.shape[1], device)
-        grounding_dino_emb_aligned = grounding_dino_linear(gd_img_emb)
-        gdi.append(grounding_dino_emb_aligned)
+        grounding_dino_emb_aligned = groundingdino_img_linear(gd_img_emb)
+        gdi.append(grounding_dino_emb_aligned.squeeze())
         
         si_emb = [sam_img_emb[None, :].to(device)]
-        sam_linear = LinearProbe(si_emb, biomedclip_img_emb.shape[1], device)
         sam_emb_aligned = sam_linear(si_emb)
-        si.append(sam_emb_aligned)
-        
-        # TODO: Grounding dino text
-    
+        si.append(sam_emb_aligned.squeeze())
+            
     bmi = torch.stack(bmi)
     bmt = torch.stack(bmt)
     si = torch.stack(si)
     gdi = torch.stack(gdi)
-    # gdt = torch.stack(gdt)
+    gdt = torch.stack(gdt)
+            
+    path2list = {}
+    path2list_t = {}
+    bmif = []
+    bmtf = []
+    uniq = list(set(pathologies))
+    for path in uniq:
+        l = []
+        t = []
+        for i, p in enumerate(pathologies):
+            if p == path:
+                l.append(bmi[i])
+                t.append(bmt[i])
+        path2list[path] = l
+        path2list_t[path] = t
+        
+    for i, path in enumerate(pathologies):
+        l = []
+        t = []
+        for p in uniq:
+            if p != path:
+                l += path2list[p]
+                t += path2list_t[p]
+        bmif.append(torch.stack(l))
+        bmtf.append(torch.stack(t))
     
-    print(bmi.shape, bmt.shape, si.shape, gdi.shape) #gdt.shape
+    bmif = torch.stack(bmif)
+    bmtf = torch.stack(bmtf)
     
-    loss_sam = 0
-    loss_groundingdino_img = 0
-    loss_groundingdino_txt = 0
+    loss = InfoNCE(negative_mode='paired')
+    loss_sam = loss(si, bmi, bmif)
+    loss_groundingdino_img = loss(gdi, bmi, bmif)
+    loss_groundingdino_txt = loss(gdt, bmt, bmtf)
+    
     return loss_sam + loss_groundingdino_img + loss_groundingdino_txt
           
 if __name__ == "__main__":
     groundingdino, sam, biomedclip, tokenizer, preprocess_train, preprocess_val = load_models()
-    compute_loss(["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
-                 "Lung lesion",
+    
+    grounding_dino_input_dims = [
+        [1, 256, 100, 100],
+        [1, 512, 50, 50],
+        [1, 1024, 25, 25],
+    ]
+    grounding_dino_linear = LinearProbe(
+        grounding_dino_input_dims,
+        512,
+        device,
+        )
+    
+    sam_input_dims = [
+        [1, 256, 64, 64]
+    ]
+    sam_linear = LinearProbe(
+        sam_input_dims, 
+        512,
+        device,
+        )
+    
+    groundingdino_txt_dims = [
+        [1, 195, 256]
+    ]
+    grounding_dino_linear_txt = LinearProbe(
+        groundingdino_txt_dims,
+        512,
+        device,
+        )
+    
+    loss = compute_loss(["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg", "datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+                 ["Lung lesion", "Cardiomegaly"],
                  groundingdino,
                  sam,
                  biomedclip,
                  tokenizer,
-                 preprocess_train)
+                 preprocess_train,
+                 grounding_dino_linear,
+                 grounding_dino_linear_txt,
+                 sam_linear)
+    print(loss)

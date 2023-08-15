@@ -21,3 +21,4 @@ yapf
 nltk
 fairscale
 open-clip-torch
+info-nce-pytorch
