@@ -45,7 +45,8 @@ class LinearProbe(torch.nn.Module):
         for i, layer in enumerate(self.linear_layers):
             emb = input_emb[i]
             emb = emb.squeeze()
-            emb = torch.mean(emb, dim=(0))
+            if len(emb.shape) >= 3: # average pooling for image [C, H, W], not for text [C, D]
+                emb = torch.mean(emb, dim=(0))
             emb = emb.reshape(1, -1)
             out = layer(emb)
             output_emb.append(out)
@@ -65,6 +66,9 @@ def linear_probe_tests():
         torch.randn(1, 512, 40, 40).to(device),
         torch.randn(1, 1024, 20, 20).to(device),
     ]
+    grounding_dino_text_emb = [
+        torch.randn(1, 195, 256).to(device),
+    ]
     sam_emb = [torch.randn(1, 256, 64, 64).to(device)]
     biomed_clip_emb = torch.randn(1, 512).to(device)
 
@@ -79,6 +83,16 @@ def linear_probe_tests():
         biomed_clip_emb.shape[1],
         device,
         )
+
+    grounding_dino_text_input_dims = [
+        [1, 195, 256]
+    ]
+    grounding_dino_text_linear = LinearProbe(
+        grounding_dino_text_input_dims,
+        biomed_clip_emb.shape[1],
+        device,
+    )
+
     sam_input_dims = [
         [1, 256, 64, 64]
     ]
@@ -90,8 +104,10 @@ def linear_probe_tests():
 
     # Run linear layers.
     grounding_dino_emb_aligned = grounding_dino_linear(grounding_dino_emb)
+    grounding_dino_text_emb_aligned = grounding_dino_text_linear(grounding_dino_text_emb)
     sam_emb_aligned = sam_linear(sam_emb)
     print(grounding_dino_emb_aligned.shape)
+    print(grounding_dino_text_emb_aligned.shape)
     print(sam_emb_aligned.shape)
 
 
