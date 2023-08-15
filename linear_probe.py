@@ -3,11 +3,12 @@ import torch
 class LinearProbe(torch.nn.Module):
     """Linear classifier to convert input_emb to the shape of output_emb."""
     
-    def __init__(self, input_emb, output_dim, device):
+    def __init__(self, input_dims, output_dim, device):
         """Constructor.
         
         Args:
-            input_emb: list of tensor for input embeddings. Assume the input_emb is of shape [C, H, W]
+            input_dim: list of list for the shape of the input embeddings, each embedding
+                shape is in the format of [H, W], [C, H, W] or [B, C, H, W].
             output_dim: int for the output dimension.
         """
         super().__init__()
@@ -16,16 +17,15 @@ class LinearProbe(torch.nn.Module):
         self.device = device
 
         # Create linear layer for each input embedding.
-        for i, emb in enumerate(input_emb):
-            dims = emb.shape
+        for dims in input_dims:
             input_dim = dims[-1] * dims[-2]
             self.linear_layers.append(
                 torch.nn.Linear(input_dim, output_dim).to(device)
                 )
 
         # Create final layer to combine all linear layers.
-        if len(input_emb) > 1:
-            self.final_layer = torch.nn.Linear(len(input_emb) * output_dim, output_dim).to(device)
+        if len(input_dims) > 1:
+            self.final_layer = torch.nn.Linear(len(input_dims) * output_dim, output_dim).to(device)
 
     def forward(self, input_emb):
         """Run linear layer to convert input_emb to dimension of output_emb.
@@ -69,13 +69,21 @@ def linear_probe_tests():
     biomed_clip_emb = torch.randn(1, 512).to(device)
 
     # Create linear layers.
+    grounding_dino_input_dims = [
+        [1, 256, 80, 80],
+        [1, 512, 40, 40],
+        [1, 1024, 20, 20],
+    ]
     grounding_dino_linear = LinearProbe(
-        grounding_dino_emb, 
+        grounding_dino_input_dims,
         biomed_clip_emb.shape[1],
         device,
         )
+    sam_input_dims = [
+        [1, 256, 64, 64]
+    ]
     sam_linear = LinearProbe(
-        sam_emb, 
+        sam_input_dims, 
         biomed_clip_emb.shape[1],
         device,
         )
