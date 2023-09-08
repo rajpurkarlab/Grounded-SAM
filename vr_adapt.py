@@ -22,15 +22,27 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Define preprocess functions
 def preprocess_sam(sam, image_path):
-    image = cv2.imread(image_path)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    transform = ResizeLongestSide(sam.image_encoder.img_size)
-    input_image = transform.apply_image(image)
-    input_image_torch = torch.as_tensor(input_image, device=device)
-    transformed_image = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
+    # image = cv2.imread(image_path)
+    # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    # transform = ResizeLongestSide(sam.image_encoder.img_size)
+    # input_image = transform.apply_image(image)
+    transform = torchvision.transforms.Compose([
+        torchvision.transforms.Resize((20,20)),
+        torchvision.transforms.ToTensor()
+    ])
+    input_image = Image.open(image_path) 
+    input_image_torch = transform(input_image).to(device)
+    # torch.as_tensor(input_image, device=device)
+    # transformed_image = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
+    x = input_image_torch
+    pixel_mean = [123.675, 116.28, 103.53]
+    pixel_std = [58.395, 57.12, 57.375]
+    x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(device)
+    print(x.shape)
 
-    input_image = sam.preprocess(transformed_image)
-    return input_image #.to(device)
+    # input_image = sam.preprocess(input_image_torch[None, :, :, :])
+    # print(input_image.shape)
+    return x[None, :, :, :] #.to(device)
 
 def preprocess_biomedclip(preprocess, tokenizer, image_path, text):
     bmc_inp_img = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
@@ -109,9 +121,10 @@ def compute_loss(batch, pathologies, groundingdino, sam, biomedclip, tokenizer, 
             samples = nested_tensor_from_tensor_list(samples)
         groundingdino_img_emb, _ = groundingdino.backbone(samples)
         
+        # TODO: need to bring sam outside of torch.no_grad but may run into GPU issue.
+        sam_img_emb = sam.image_encoder(preprocess_sam(sam, image_path))[0][0]
+        
         with torch.no_grad():
-            # TODO: need to bring sam outside of torch.no_grad but may run into GPU issue.
-            sam_img_emb = sam.image_encoder(preprocess_sam(sam, image_path))[0][0]
             img, txt = preprocess_biomedclip(preprocess_train, tokenizer, image_path, pathologies[i])
             biomedclip_img_emb, biomedclip_txt_emb, _ = biomedclip(img, txt)
             bmi.append(biomedclip_img_emb.to(device).squeeze())
@@ -201,14 +214,17 @@ if __name__ == "__main__":
         device,
         )
     
-    loss = compute_loss(["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg", "datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
-                 ["Lung lesion", "Cardiomegaly"],
-                 groundingdino,
-                 sam,
-                 biomedclip,
-                 tokenizer,
-                 preprocess_train,
-                 grounding_dino_linear,
-                 grounding_dino_linear_txt,
-                 sam_linear)
+    loss = compute_loss(
+                ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg", "datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+                ["Lung lesion", "Cardiomegaly"],
+                # ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+                # ["Lung lesion"],
+                groundingdino,
+                sam,
+                biomedclip,
+                tokenizer,
+                preprocess_train,
+                grounding_dino_linear,
+                grounding_dino_linear_txt,
+                sam_linear)
     print(loss)

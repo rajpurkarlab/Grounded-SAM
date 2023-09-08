@@ -27,9 +27,13 @@ def load_biomed_clip(device):
     model.to(device)
     return model, tokenizer, preprocess_train, preprocess_val
 
-def run_biomed_clip(img_path, text_prompt):
+def run_biomed_clip(img_path, text_prompt, gradcam=False):
     model, tokenizer, preprocess_train, preprocess_val = load_biomed_clip(device)
-    # Using `model`, compute similarity grid between embeddings of `img_path` and `text_prompt`
+    if gradcam:
+        pass
+    else:
+        # Using `model`, compute similarity grid between embeddings of `img_path` and `text_prompt`
+        pass
 
 def run_biovil(img_path, text_prompt, gradcam=False):
     if gradcam:
