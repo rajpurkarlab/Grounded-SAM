@@ -3,7 +3,6 @@ import torch
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-import h5py
 from linear_probe import LinearProbe
 from vr_adapt import load_models, compute_loss
 import torch
@@ -101,8 +100,15 @@ def load_model():
 def train(hyparams, output_path, model_paths):
     """Train the model."""
     # Load data and model
-    dataloader = load_data()
+    dataloader = load_data(tensor=True)
     groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear = load_model()
+    
+    # print("Grounding dino parameters")
+    # print(list(groundingdino.parameters()))
+    # print("Linear image parameters")
+    # print(list(groundingdino_img_linear.parameters()))
+    # print("Linear text parameters")
+    # print(list(groundingdino_txt_linear.parameters()))
 
     optimizers = {}
     optimizers["groundingdino"] = torch.optim.Adam(groundingdino.parameters(), lr=hyparams["lr"])
@@ -115,24 +121,24 @@ def train(hyparams, output_path, model_paths):
     groundingdino.train()
     sam.train()
     biomedclip.eval()
-    for epoch_num in hyparams["epochs"]:
+    for epoch_num in range(hyparams["epochs"]):
         print("Epoch #{}".format(epoch_num))
 
         for i, data in enumerate(dataloader):
             print("Batch #{}".format(i))
             # Load data
-            # images = data["image"]
+            images = data["image"]
             image_paths = data["image_path"]
             reports = data["report"]
 
-            for key, optimizer in optimizers:
+            for key, optimizer in optimizers.items():
                 optimizer.zero_grad()
 
             # Compute loss
             loss = compute_loss(image_paths, reports, groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear)
             loss.backward()
             
-            for key, optimizer in optimizers:
+            for key, optimizer in optimizers.items():
                 optimizer.step()
     
     return groundingdino, sam, groundingdino_img_linear, groundingdino_txt_linear
@@ -151,10 +157,10 @@ def load_data_test():
 
 
 if __name__ == "__main__":
-    load_data_test()
+    # load_data_test()
 
-    # hyparams = {
-    #     "lr": 1e-4,
-    #     "epochs": 1,
-    # }
-    # train(hyparams, None, None)
+    hyparams = {
+        "lr": 1e-4,
+        "epochs": 1,
+    }
+    train(hyparams, None, None)

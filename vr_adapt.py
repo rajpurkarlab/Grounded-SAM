@@ -38,7 +38,7 @@ def preprocess_sam(sam, image_path):
     pixel_mean = [123.675, 116.28, 103.53]
     pixel_std = [58.395, 57.12, 57.375]
     x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(device)
-    print(x.shape)
+    # print(x.shape)
 
     # input_image = sam.preprocess(input_image_torch[None, :, :, :])
     # print(input_image.shape)

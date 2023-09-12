@@ -12,7 +12,7 @@ class LinearProbe(torch.nn.Module):
             output_dim: int for the output dimension.
         """
         super().__init__()
-        self.linear_layers = []
+        self.linear_layers = torch.nn.ModuleList()
         self.final_layer = None
         self.device = device
 
