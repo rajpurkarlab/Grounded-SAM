@@ -48,3 +48,6 @@ def run_biovil(img_path, text_prompt, gradcam=False):
     return similarity_map
 
 # def run_chexzero(img_path, text_prompt):
+
+if __name__ == "__main__":
+    

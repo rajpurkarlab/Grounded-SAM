@@ -5,12 +5,15 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import h5py
 from linear_probe import LinearProbe
-from vr_adapt import load_models
+from vr_adapt import load_models, compute_loss
+import torch
+from torchvision import transforms
+from PIL import Image
 
 class MIMICCXRDataset(Dataset):
     """MIMIC-CXR dataset."""
 
-    def __init__(self, csv_file='/n/data1/hms/dbmi/rajpurkar/lab/CXR-ReDonE/data/mimic_train_impressions.csv', img_dir='/n/data1/hms/dbmi/rajpurkar/lab/datasets/cxr/MIMIC-CXR/raw_jpg/files', transform=None):
+    def __init__(self, csv_file='/n/data1/hms/dbmi/rajpurkar/lab/CXR-ReDonE/data/mimic_train_impressions.csv', img_dir='/n/data1/hms/dbmi/rajpurkar/lab/datasets/cxr/MIMIC-CXR/raw_jpg/files', size=(224,224), tensor=False):
         """
         Arguments:
             csv_file (string): Path to the csv file with annotations.
@@ -19,8 +22,11 @@ class MIMICCXRDataset(Dataset):
                 on a sample.
         """
         self.dataframe = pd.read_csv(csv_file)
+        self.dataframe.dropna(subset=['report'], inplace=True)
+        
         self.img_dir = img_dir
-        self.transform = transform
+        self.size = size
+        self.tensor = tensor
 
     def __len__(self):
         return len(self.dataframe)
@@ -36,15 +42,22 @@ class MIMICCXRDataset(Dataset):
         report = row['report']
         
         image_path = f'{self.img_dir}/p{str(subject_id)[0:2]}/p{subject_id}/s{study_id}/{dicom_id}.jpg'
-                
-        sample = {'image_path': image_path, 'report': report}
+        
+        if self.tensor:
+            img = Image.open(image_path)
+            # Resize image to self.size
+            img = img.resize(self.size)
+            convert_tensor = transforms.ToTensor()
+            sample = {'image': convert_tensor(img), 'image_path': image_path, 'report': report}
+        else:
+            sample = {'image_path': image_path, 'report': report}
         
         return sample
 
-def load_data(batch_size=16):
+def load_data(batch_size=16, tensor=False):
     """Get dataloader for training.
     """
-    dataset = MIMICCXRDataset()
+    dataset = MIMICCXRDataset(tensor=tensor)
     return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 def load_model():
@@ -53,13 +66,13 @@ def load_model():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     groundingdino, sam, biomedclip, tokenizer, preprocess_train, preprocess_val = load_models()
     
-    grounding_dino_input_dims = [
+    groundingdino_input_dims = [
         [1, 256, 100, 100],
         [1, 512, 50, 50],
         [1, 1024, 25, 25],
     ]
-    grounding_dino_linear = LinearProbe(
-        grounding_dino_input_dims,
+    groundingdino_linear = LinearProbe(
+        groundingdino_input_dims,
         512,
         device,
         )
@@ -76,21 +89,72 @@ def load_model():
     groundingdino_txt_dims = [
         [1, 195, 256]
     ]
-    grounding_dino_linear_txt = LinearProbe(
+    groundingdino_linear_txt = LinearProbe(
         groundingdino_txt_dims,
         512,
         device,
         )
 
-    return groundingdino, sam, biomedclip, tokenizer, preprocess_train, grounding_dino_linear, grounding_dino_linear_txt, sam_linear
+    return groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_linear, groundingdino_linear_txt, sam_linear
     # NOTE: Linear probes still need to be tuned
 
 def train(hyparams, output_path, model_paths):
     """Train the model."""
+    # Load data and model
     dataloader = load_data()
-    groundingdino, sam, biomedclip, tokenizer, preprocess_train, grounding_dino_linear, grounding_dino_linear_txt, sam_linear = load_model()
-    # ...
+    groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear = load_model()
+
+    optimizers = {}
+    optimizers["groundingdino"] = torch.optim.Adam(groundingdino.parameters(), lr=hyparams["lr"])
+    optimizers["sam"] = torch.optim.Adam(sam.parameters(), lr=hyparams["lr"])
+    optimizers["groundingdino_img_linear"] = torch.optim.Adam(groundingdino_img_linear.parameters(), lr=hyparams["lr"])
+    optimizers["groundingdino_txt_linear"] = torch.optim.Adam(groundingdino_txt_linear.parameters(), lr=hyparams["lr"])
+    optimizers["sam_linear"] = torch.optim.Adam(sam.parameters(), lr=hyparams["lr"])
+    
+    # Training loop
+    groundingdino.train()
+    sam.train()
+    biomedclip.eval()
+    for epoch_num in hyparams["epochs"]:
+        print("Epoch #{}".format(epoch_num))
+
+        for i, data in enumerate(dataloader):
+            print("Batch #{}".format(i))
+            # Load data
+            # images = data["image"]
+            image_paths = data["image_path"]
+            reports = data["report"]
+
+            for key, optimizer in optimizers:
+                optimizer.zero_grad()
+
+            # Compute loss
+            loss = compute_loss(image_paths, reports, groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear)
+            loss.backward()
+            
+            for key, optimizer in optimizers:
+                optimizer.step()
+    
+    return groundingdino, sam, groundingdino_img_linear, groundingdino_txt_linear
+        
+        
+def load_data_test():
+    dataloader = load_data(tensor=True)
+
+    print("Number of batches:", len(dataloader))
+    for i, data in enumerate(dataloader):
+        images = data["image"]
+        image_paths = data["image_path"]
+        report = data["report"]
+        # print(image_paths, report)
+    print("Passed all tests")
 
 
 if __name__ == "__main__":
-    train()
+    load_data_test()
+
+    # hyparams = {
+    #     "lr": 1e-4,
+    #     "epochs": 1,
+    # }
+    # train(hyparams, None, None)
