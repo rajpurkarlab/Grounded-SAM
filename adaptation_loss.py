@@ -35,15 +35,14 @@ def preprocess_sam(sam, image_path):
     # torch.as_tensor(input_image, device=device)
     # transformed_image = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
     x = input_image_torch
-    print(x.shape)
-    pixel_mean = torch.Tensor([123.675, 116.28, 103.53])
-    pixel_std = torch.Tensor([58.395, 57.12, 57.375])
-    x = (x - pixel_mean) / pixel_std
-    print(x.shape)
+    pixel_mean = [123.675, 116.28, 103.53]
+    pixel_std = [58.395, 57.12, 57.375]
+    x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(device)
+    # print(x.shape)
 
     # input_image = sam.preprocess(input_image_torch[None, :, :, :])
     # print(input_image.shape)
-    return x #.to(device)
+    return x[None, :, :, :] #.to(device)
 
 def preprocess_biomedclip(preprocess, tokenizer, image_path, text):
     bmc_inp_img = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
@@ -117,14 +116,12 @@ def compute_loss(batch, pathologies, groundingdino, sam, biomedclip, tokenizer, 
         gdt.append(groundingdino_txt_linear(emb).squeeze())
      
     for i, image_path in enumerate(batch):
-        # samples = [preprocess_groundingdino_img(image_path)]
-        # if isinstance(samples, (list, torch.Tensor)):
-        #     samples = nested_tensor_from_tensor_list(samples)
-        # groundingdino_img_emb, _ = groundingdino.backbone(samples)
+        samples = [preprocess_groundingdino_img(image_path)]
+        if isinstance(samples, (list, torch.Tensor)):
+            samples = nested_tensor_from_tensor_list(samples)
+        groundingdino_img_emb, _ = groundingdino.backbone(samples)
         
         # TODO: need to bring sam outside of torch.no_grad but may run into GPU issue.
-        print(type(preprocess_sam(sam, image_path)))
-        raise NameError()
         sam_img_emb = sam.image_encoder(preprocess_sam(sam, image_path))[0][0]
         
         with torch.no_grad():
@@ -218,10 +215,10 @@ if __name__ == "__main__":
         )
     
     loss = compute_loss(
-                # ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg", "datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
-                # ["Lung lesion", "Cardiomegaly"],
-                ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
-                ["Lung lesion"],
+                ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg", "datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+                ["Lung lesion", "Cardiomegaly"],
+                # ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+                # ["Lung lesion"],
                 groundingdino,
                 sam,
                 biomedclip,

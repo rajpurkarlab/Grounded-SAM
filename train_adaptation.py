@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from linear_probe import LinearProbe
-from vr_adapt import load_models, compute_loss
+from adaptation_loss import load_models, compute_loss
 import torch
 from torchvision import transforms
 from PIL import Image
