@@ -7,7 +7,7 @@ import cv2
 import open_clip
 from segment_anything.utils.transforms import ResizeLongestSide
 import torchvision
-from info_nce import InfoNCE
+# from info_nce import InfoNCE
 
 from linear_probe import LinearProbe
 
@@ -62,7 +62,7 @@ def load_models():
     groundingdino = load_model_hf(ckpt_repo_id, ckpt_filenmae, ckpt_config_filename) # groundingdino.backbone, groundingdino.bert, groundingdino.tokenizer
     
     # Load Grounded SAM
-    sam_checkpoint = 'sam_vit_h_4b8939.pth'
+    sam_checkpoint = './initial_experiments/ckpts/sam_vit_h_4b8939.pth'
     sam = build_sam(checkpoint=sam_checkpoint) # sam.image_encoder, sam.prompt_encoder
     sam.to(device)
 
@@ -122,7 +122,9 @@ def compute_loss(batch, pathologies, groundingdino, sam, biomedclip, tokenizer, 
         groundingdino_img_emb, _ = groundingdino.backbone(samples)
         
         # TODO: need to bring sam outside of torch.no_grad but may run into GPU issue.
-        sam_img_emb = sam.image_encoder(preprocess_sam(sam, image_path))[0][0]
+        sam_img = preprocess_sam(sam, image_path)
+        print(sam_img.shape)
+        sam_img_emb = sam.image_encoder(sam_img)[0][0]
         
         with torch.no_grad():
             img, txt = preprocess_biomedclip(preprocess_train, tokenizer, image_path, pathologies[i])
@@ -215,10 +217,10 @@ if __name__ == "__main__":
         )
     
     loss = compute_loss(
-                ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg", "datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
-                ["Lung lesion", "Cardiomegaly"],
-                # ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
-                # ["Lung lesion"],
+                # ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg", "datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+                # ["Lung lesion", "Cardiomegaly"],
+                ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+                ["Lung lesion"],
                 groundingdino,
                 sam,
                 biomedclip,

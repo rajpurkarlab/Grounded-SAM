@@ -7,6 +7,11 @@ If significant changes are need for different datasets, we should put them in he
 and call them in the main function.
 """
 
+import warnings
+warnings.simplefilter("ignore")
+import sys
+sys.path.extend(["../", "./"])
+
 import json
 from uuid import uuid4
 import pycocotools.mask as mask_util
@@ -15,8 +20,9 @@ import sys
 import numpy as np
 
 from utils import PROMPTS, get_iou, get_queries
-from ..models.grounded_sam import run_grounded_sam, env_setup, load_models
-from ..models.baselines import run_biovil
+from models.grounded_sam import run_grounded_sam, env_setup, load_models
+from models.baselines import run_biovil
+from model import load_model
 
 def eval_results(dataset, model, GRADCAM=False):
     if dataset == "chexlocalize":
@@ -48,7 +54,8 @@ def eval_pascal(model, GRADCAM):
     # Load model
     if model == "grounded-sam":
         env_setup()
-        groundingdino_model, sam_predictor = load_models()
+        # groundingdino_model, sam_predictor = load_models()
+        groundingdino_model, sam_predictor, _, _, _, _, _, _ = load_model()
     elif model == "biovil":
         pass
     else:
@@ -118,7 +125,8 @@ def eval_pascal(model, GRADCAM):
 def eval_chexlocalize(model, GRADCAM):
     if model == "grounded-sam":
         env_setup()
-        groundingdino_model, sam_predictor = load_models()
+        # groundingdino_model, sam_predictor = load_models()
+        groundingdino_model, sam_predictor, _, _, _, _, _, _ = load_model()
     elif model == "biovil":
         pass
     else:
@@ -142,28 +150,28 @@ def eval_chexlocalize(model, GRADCAM):
 
                 text_prompt = PROMPTS[query]
 
-                try:
-                    if model == "grounded-sam":
-                        pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
-                    elif model == "biovil":
-                        if GRADCAM:
-                            pred_mask = run_biovil(filename, text_prompt, gradcam=True)
-                        else:
-                            pred_mask = run_biovil(filename, text_prompt)
+                # try:
+                if model == "grounded-sam":
+                    pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
+                elif model == "biovil":
+                    if GRADCAM:
+                        pred_mask = run_biovil(filename, text_prompt, gradcam=True)
                     else:
-                        raise NotImplementedError(f"Model {model} not supported")        
-            
-                    pred_mask = (pred_mask != 0).astype(int)
-                    
-                    # compute iou
-                    try:
-                        iou_score = get_iou(pred_mask, gt_mask)
-                    except:
-                        iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
-
-                    iou_results[query].append(iou_score)
+                        pred_mask = run_biovil(filename, text_prompt)
+                else:
+                    raise NotImplementedError(f"Model {model} not supported")        
+        
+                pred_mask = (pred_mask != 0).astype(int)
+                
+                # compute iou
+                try:
+                    iou_score = get_iou(pred_mask, gt_mask)
                 except:
-                    print(f"\nSkipping {filename}, {text_prompt} due to errors\n")
+                    iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
+
+                iou_results[query].append(iou_score)
+                # except:
+                #     print(f"\nSkipping {filename}, {text_prompt} due to errors\n")
     
     # Compute and print pathology-specific mIoUs
     total_sum = 0
@@ -188,11 +196,22 @@ class UnitTest:
         pass
 
     def run_eval_scripts(self):
+        print("Starting Grounded-SAM, CheXlocalize...")
         print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam"))
+        
+        print("Starting Grounded-SAM, PASCAL...")
         print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam"))
+        
+        print("Starting BioViL, CheXlocalize, GRADCAM=False...")
         print("BioViL, CheXlocalize, GRADCAM=False: ", eval_results("chexlocalize", "biovil"))
+        
+        print("Starting BioViL, CheXlocalize, GRADCAM=True...")
         print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))
+        
+        print("Starting BioViL, PASCAL, GRADCAM=False...")
         print("BioViL, PASCAL, GRADCAM=False: ", eval_results("pascal", "biovil"))
+        
+        print("Starting BioViL, PASCAL, GRADCAM=True...")
         print("BioViL, PASCAL, GRADCAM=True: ", eval_results("pascal", "biovil", GRADCAM=True))
 
 if __name__=='__main__':
