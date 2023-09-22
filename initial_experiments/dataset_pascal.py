@@ -10,7 +10,6 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from linear_probe import LinearProbe
-from adaptation_loss import load_models, compute_loss
 import torch
 from torchvision import transforms
 from PIL import Image
@@ -46,13 +45,14 @@ class PASCALDataset(Dataset):
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-
+            
         id = self.train_ids[idx]
         img_path = self.img_folder_path + '/' + id + '.jpg'
 
         # load ground truth
         gt_path = self.gt_folder_path + '/' + id + '.png'
-        gt_masks = get_queries(gt_path)
+        
+        gt_masks = get_queries(gt_path, self.size)
 
         if self.tensor:
             img = Image.open(img_path)
@@ -63,7 +63,7 @@ class PASCALDataset(Dataset):
             sample = {'image': convert_tensor(img), 'image_path': img_path, 'gt_image': convert_tensor(gt_img), 'gt_image_path': gt_path, 'gt_masks': gt_masks}
         else:
             sample = {'image_path': img_path, 'gt_image_path': gt_path, 'gt_masks': gt_masks}
-        
+                
         return sample
 
 def load_data(batch_size=16, tensor=False):
