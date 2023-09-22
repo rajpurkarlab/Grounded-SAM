@@ -12,14 +12,13 @@ import cv2
 import open_clip
 from segment_anything.utils.transforms import ResizeLongestSide
 from segment_anything import sam_model_registry, build_sam, SamPredictor
-from groundingdino.util.misc import nested_tensor_from_tensor_list
 
 from models.grounded_sam import *
 from models.GroundingDINO.groundingdino.util.inference import load_image
 from linear_probe import LinearProbe
 
 
-def load_model(device="cpu", predictor=False):
+def load_model(device="cuda", predictor=False):
     """Load image encoders, text encoders, and linear probes.
     
     Load Grounding Dino - model(image encoder, text encoder), linear probe for image embedding and text embedding.
@@ -80,7 +79,7 @@ def load_model(device="cpu", predictor=False):
     return groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear
 
 
-def preprocess_sam(sam, image_path, device="cpu"):
+def preprocess_sam(sam, image_path, device="cuda"):
     """Preprocess image for SAM."""
     transform = torchvision.transforms.Compose([
         torchvision.transforms.Resize((20, 20)),
@@ -96,14 +95,14 @@ def preprocess_sam(sam, image_path, device="cpu"):
     return x[None, :, :, :]
 
 
-def preprocess_biomedclip(preprocess, tokenizer, image_path, text, device="cpu"):
+def preprocess_biomedclip(preprocess, tokenizer, image_path, text, device="cuda"):
     """Preprocess image and text for Biomed CLIP."""
     bmc_img = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
     texts = tokenizer(text, context_length=256).to(device)
     return bmc_img, texts
 
 
-def preprocess_groundingdino_img(image_path, device="cpu"):
+def preprocess_groundingdino_img(image_path, device="cuda"):
     """Preprocess image for Grounding Dino."""
     _, image = load_image(image_path)
     transform = torchvision.transforms.Compose([

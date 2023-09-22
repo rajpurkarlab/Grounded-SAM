@@ -55,7 +55,7 @@ def eval_pascal(model, GRADCAM):
     if model == "grounded-sam":
         env_setup()
         # groundingdino_model, sam_predictor = load_models()
-        groundingdino_model, sam_predictor, _, _, _, _, _, _ = load_model()
+        groundingdino_model, sam_predictor, _, _, _, _, _, _ = load_model(predictor=True)
     elif model == "biovil":
         pass
     else:
@@ -126,7 +126,7 @@ def eval_chexlocalize(model, GRADCAM):
     if model == "grounded-sam":
         env_setup()
         # groundingdino_model, sam_predictor = load_models()
-        groundingdino_model, sam_predictor, _, _, _, _, _, _ = load_model()
+        groundingdino_model, sam_predictor, _, _, _, _, _, _ = load_model(predictor=True)
     elif model == "biovil":
         pass
     else:
@@ -152,7 +152,7 @@ def eval_chexlocalize(model, GRADCAM):
 
                 # try:
                 if model == "grounded-sam":
-                    pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
+                    pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model.to('cuda'), sam_predictor)
                 elif model == "biovil":
                     if GRADCAM:
                         pred_mask = run_biovil(filename, text_prompt, gradcam=True)

@@ -32,7 +32,8 @@ def load_model_hf(repo_id, filename, ckpt_config_filename, device='cpu'):
     args.device = device
 
     cache_file = hf_hub_download(repo_id=repo_id, filename=filename)
-    checkpoint = torch.load(cache_file, map_location='cpu')
+    # checkpoint = torch.load(cache_file, map_location='cpu')
+    checkpoint = torch.load(cache_file, map_location=device)
     log = model.load_state_dict(clean_state_dict(checkpoint['model']), strict=False)
     print("Model loaded from {} \n => {}".format(cache_file, log))
     _ = model.eval()

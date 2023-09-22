@@ -19,7 +19,7 @@ from utils import get_queries
 class PASCALDataset(Dataset):
     """PASCAL VOC dataset."""
 
-    def __init__(self, size=(224,224), tensor=True):
+    def __init__(self, size=(256,256), tensor=True):
         self.train_id_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/train.txt'
         self.class_name_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/class_names.txt'
         self.img_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages'
@@ -38,33 +38,40 @@ class PASCALDataset(Dataset):
         
         self.size = size
         self.tensor = tensor
+        
+        self.samples = []
+        
+        for idx in range(len(self.train_ids)):
+            id = self.train_ids[idx]
+            img_path = self.img_folder_path + '/' + id + '.jpg'
 
+            gt_path = self.gt_folder_path + '/' + id + '.png'
+            
+            gt_masks = get_queries(gt_path, self.size)
+
+            if self.tensor:
+                img = Image.open(img_path)
+                img = img.resize(self.size)
+                gt_img = Image.open(gt_path)
+                gt_img = gt_img.resize(self.size)
+                convert_tensor = transforms.ToTensor()
+                
+                for val in gt_masks:
+                    self.samples.append({'image': convert_tensor(img), 'image_path': img_path, 'gt_mask': gt_masks[val]})
+            
+            else:
+                for val in gt_masks:
+                    print(val)
+                    self.samples.append({'image_path': img_path, 'gt_mask': gt_masks[val]})
+            
     def __len__(self):
-        return len(self.train_ids)
+        return len(self.samples)
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-            
-        id = self.train_ids[idx]
-        img_path = self.img_folder_path + '/' + id + '.jpg'
-
-        # load ground truth
-        gt_path = self.gt_folder_path + '/' + id + '.png'
-        
-        gt_masks = get_queries(gt_path, self.size)
-
-        if self.tensor:
-            img = Image.open(img_path)
-            img = img.resize(self.size)
-            gt_img = Image.open(gt_path)
-            gt_img = gt_img.resize(self.size)
-            convert_tensor = transforms.ToTensor()
-            sample = {'image': convert_tensor(img), 'image_path': img_path, 'gt_image': convert_tensor(gt_img), 'gt_image_path': gt_path, 'gt_masks': gt_masks}
-        else:
-            sample = {'image_path': img_path, 'gt_image_path': gt_path, 'gt_masks': gt_masks}
                 
-        return sample
+        return self.samples[idx]
 
 def load_data(batch_size=16, tensor=False):
     """Get dataloader for training.
@@ -82,7 +89,7 @@ class UnitTest:
         print("Number of batches:", len(dataloader))
         for i, data in enumerate(dataloader):
             images = data["image"]
-            masks = data["gt_masks"]
+            masks = data["gt_mask"]
         print("Passed all tests")
 
 if __name__=='__main__':
