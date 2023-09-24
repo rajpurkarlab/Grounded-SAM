@@ -195,14 +195,30 @@ class mySAM:
 
     def __init__(
         self,
+        model_name="vit_l",
         ckpt_file="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
+        img_linear_ckpt=None,
         device="cuda",
     ):
         # Load Grounded SAM
-        self.model = sam_model_registry["vit_l"](checkpoint=ckpt_file)
+        self.model = sam_model_registry[model_name](checkpoint=ckpt_file)
         self.model.to(device)
 
+        # Load linear probe for SAM image embedding
+        sam_input_dims = [
+            [1, 256, 64, 64]
+        ]
+        self.img_linear = LinearProbe(
+            sam_input_dims, 
+            512,
+            device,
+        )
+        if img_linear_ckpt:
+            self.img_linear.load_state_dict(torch.load(img_linear_ckpt, map_location=device))
+
+
     def preprocess_img(self, image_path, device="cuda"):
+        """Preprocess image for SAM."""
         transform = torchvision.transforms.Compose([
             torchvision.transforms.Resize((20, 20)),
             torchvision.transforms.ToTensor()
@@ -218,14 +234,27 @@ class mySAM:
 
     
     def get_img_emb(self, image_path, device):
+        """Get image embedding for SAM"""
         sam_img = self.preprocess_img(image_path, device)
         sam_img_embedding = self.model.image_encoder(sam_img)
         return sam_img_embedding
 
 
-    def save_model(self, ckpt_folder="./initial_experiments/ckpts/", ckpt_file="sam.pth"):
-        """Save SAM model."""
-        torch.save(self.model.state_dict(), ckpt_folder + ckpt_file)
+    def align_img_emb(self, sam_img_embedding):
+        """Align image embedding to 512."""
+        sam_img_embedding = self.img_linear(sam_img_embedding)
+        return sam_img_embedding
+
+
+    def save_model(
+        self, 
+        ckpt_folder="./initial_experiments/ckpts/", 
+        backbone_file="sam.pth",
+        img_linear_ckpt="sam_img_linear.pth"
+    ):
+        """Save SAM backbone and linear probe for image embedding."""
+        torch.save(self.model.state_dict(), ckpt_folder + backbone_file)
+        torch.save(self.img_linear.state_dict(), ckpt_folder + img_linear_ckpt)
 
 
 class UnitTest:
@@ -283,6 +312,8 @@ class UnitTest:
         # Generate embedding
         sam_img_embedding = sam.get_img_emb(self.img_path, self.device)
         print("SAM image embedding shape:", sam_img_embedding.shape)
+        sam_img_embedding = sam.align_img_emb(sam_img_embedding)
+        print("After alignment, image embedding shape:", sam_img_embedding.shape)
         print("Test sam: SUCCESS!")
 
     
@@ -320,7 +351,7 @@ class UnitTest:
 
 if __name__ == "__main__":
     unit_test = UnitTest()
-    
+
     unit_test.test_grounding_dino()
     unit_test.test_grounding_dino_save()
 
