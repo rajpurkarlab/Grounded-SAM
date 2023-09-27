@@ -36,6 +36,7 @@ class MyGroundingDino:
         # Load grounding dino model
         self.model = load_model(config_file, ckpt_file)
         self.model.to(device)
+        self.device = device
         
         # Load linear probe for Grounding Dino image embedding
         groundingdino_input_dims = [
@@ -64,36 +65,36 @@ class MyGroundingDino:
             self.txt_linear.load_state_dict(torch.load(txt_linear_ckpt, map_location=device))
 
 
-    def preprocess_img(self, image_path, device="cuda"):
+    def preprocess_img(self, image_path):
         """Preprocess image for Grounding Dino."""
         _, image = load_image(image_path)
         transform = torchvision.transforms.Compose([
             torchvision.transforms.Resize((224, 224)),
         ])
         image = transform(image)
-        image = nested_tensor_from_tensor_list([image]).to(device)
-        return image.to(device)
+        image = nested_tensor_from_tensor_list([image]).to(self.device)
+        return image.to(self.device)
     
 
-    def get_img_emb(self, image_path, device="cuda"):
+    def get_img_emb(self, image_path):
         """Get image embedding for Grounding Dino."""
         # Preprocess
-        img = self.preprocess_img(image_path, device)
+        img = self.preprocess_img(image_path, self.device)
         
         # Run backbone
         backbone_output, _ = self.model.backbone(img)
         groundingdino_img_embedding = []
         for emb in backbone_output:
-            groundingdino_img_embedding.append(emb.tensors.to(device))
+            groundingdino_img_embedding.append(emb.tensors.to(self.device))
         return groundingdino_img_embedding
     
 
-    def get_txt_emb(self, text, device="cuda"):
+    def get_txt_emb(self, text):
         """Get text embedding for Grounding Dino."""
         # Tokenize
         tokenized = self.model.tokenizer(text, padding="max_length", max_length=195, return_tensors="pt")
         for key, value in tokenized.items():
-            tokenized[key] = value.to(device)
+            tokenized[key] = value.to(self.device)
 
         text_self_attention_masks, position_ids = generate_masks_with_special_tokens_and_transfer_map_nocate(
             tokenized, self.model.specical_tokens, self.model.tokenizer
@@ -117,7 +118,7 @@ class MyGroundingDino:
 
         # Run text backbone
         bert_output = self.model.bert(**tokenized_for_encoder)
-        groundingdino_txt_embedding = self.model.feat_map(bert_output["last_hidden_state"]).to(device)
+        groundingdino_txt_embedding = self.model.feat_map(bert_output["last_hidden_state"]).to(self.device)
         return groundingdino_txt_embedding
 
     
@@ -160,28 +161,29 @@ class myBiomedCLIP:
         self.model = biomedclip.to(device)
         self.preprocess = preprocess_train
         self.tokenizer = open_clip.get_tokenizer(config_file)
+        self.device=device
 
         # Load checkpoint
         if ckpt_file:
             self.model.load_state_dict(torch.load(ckpt_file, map_location=device))
 
     
-    def preprocess_img(self, image_path, device="cuda"):
+    def preprocess_img(self, image_path):
         """Preprocess image for Biomed CLIP."""
-        bmc_img = self.preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+        bmc_img = self.preprocess(Image.open(image_path)).unsqueeze(0).to(self.device)
         return bmc_img
     
 
-    def get_img_emb(self, image_path, device="cuda"):
+    def get_img_emb(self, image_path):
         """Get image embedding for Biomed CLIP"""
-        bmc_img = self.preprocess_img(image_path, device)
+        bmc_img = self.preprocess_img(image_path, self.device)
         bmc_img_embedding = self.model.visual(bmc_img)
         return bmc_img_embedding
 
 
-    def get_txt_emb(self, text, device="cuda"):
+    def get_txt_emb(self, text):
         """Get text embedding for Biomed CLIP"""
-        bmc_txt = self.tokenizer(text, context_length=256).to(device)
+        bmc_txt = self.tokenizer(text, context_length=256).to(self.device)
         bmc_txt_embedding = self.model.encode_text(bmc_txt)
         return bmc_txt_embedding
 
@@ -203,6 +205,7 @@ class mySAM:
         # Load Grounded SAM
         self.model = sam_model_registry[model_name](checkpoint=ckpt_file)
         self.model.to(device)
+        self.device = device
 
         # Load linear probe for SAM image embedding
         sam_input_dims = [
@@ -217,25 +220,25 @@ class mySAM:
             self.img_linear.load_state_dict(torch.load(img_linear_ckpt, map_location=device))
 
 
-    def preprocess_img(self, image_path, device="cuda"):
+    def preprocess_img(self, image_path):
         """Preprocess image for SAM."""
         transform = torchvision.transforms.Compose([
             torchvision.transforms.Resize((20, 20)),
             torchvision.transforms.ToTensor()
         ])
         input_image = Image.open(image_path) 
-        input_image_torch = transform(input_image).to(device)
+        input_image_torch = transform(input_image).to(self.device)
 
         x = input_image_torch
         pixel_mean = [123.675, 116.28, 103.53]
         pixel_std = [58.395, 57.12, 57.375]
-        x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(device)
+        x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(self.device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(self.device)
         return x[None, :, :, :]
 
     
-    def get_img_emb(self, image_path, device):
+    def get_img_emb(self, image_path):
         """Get image embedding for SAM"""
-        sam_img = self.preprocess_img(image_path, device)
+        sam_img = self.preprocess_img(image_path, self.device)
         sam_img_embedding = self.model.image_encoder(sam_img)
         return sam_img_embedding
 
@@ -274,12 +277,12 @@ class UnitTest:
         grounding_dino = MyGroundingDino()
 
         # Generate embedding
-        groundingdino_img_embedding = grounding_dino.get_img_emb(self.img_path, self.device)
+        groundingdino_img_embedding = grounding_dino.get_img_emb(self.img_path)
         print("Grounding Dino image embedding shape:")
         for emb in groundingdino_img_embedding:
             print(emb.shape)
 
-        groundingdino_txt_embedding = grounding_dino.get_txt_emb(self.text, self.device)
+        groundingdino_txt_embedding = grounding_dino.get_txt_emb(self.text)
         print("Grounding Dino text embedding shape:", groundingdino_txt_embedding.shape)
 
         groundingdino_img_embedding = grounding_dino.align_img_emb(groundingdino_img_embedding)
@@ -310,7 +313,7 @@ class UnitTest:
         sam = mySAM()
 
         # Generate embedding
-        sam_img_embedding = sam.get_img_emb(self.img_path, self.device)
+        sam_img_embedding = sam.get_img_emb(self.img_path)
         print("SAM image embedding shape:", sam_img_embedding.shape)
         sam_img_embedding = sam.align_img_emb(sam_img_embedding)
         print("After alignment, image embedding shape:", sam_img_embedding.shape)
@@ -332,10 +335,10 @@ class UnitTest:
         bmc = myBiomedCLIP()
         
         # Generate embedding
-        bmc_img_embedding = bmc.get_img_emb(self.img_path, self.device)
+        bmc_img_embedding = bmc.get_img_emb(self.img_path)
         print("Biomed CLIP image embedding shape:", bmc_img_embedding.shape)
 
-        bmc_txt_embedding = bmc.get_txt_emb(self.text, self.device)
+        bmc_txt_embedding = bmc.get_txt_emb(self.text)
         print("Biomed CLIP text embedding shape:", bmc_txt_embedding.shape)
         print("Test biomed clip: SUCCESS!")
     
