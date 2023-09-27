@@ -55,13 +55,12 @@ class PASCALDataset(Dataset):
                 gt_img = Image.open(gt_path)
                 gt_img = gt_img.resize(self.size)
                 convert_tensor = transforms.ToTensor()
-                
+                                
                 for val in gt_masks:
                     self.samples.append({'image': convert_tensor(img), 'image_path': img_path, 'gt_mask': gt_masks[val]})
             
             else:
                 for val in gt_masks:
-                    print(val)
                     self.samples.append({'image_path': img_path, 'gt_mask': gt_masks[val]})
             
     def __len__(self):

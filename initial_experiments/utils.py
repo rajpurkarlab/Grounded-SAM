@@ -7,14 +7,6 @@ from datasets import Image as DImage
 
 """SAM eval utils"""
 
-def create_dataset(images, labels):
-    dataset = Dataset.from_dict({"image": images,
-                                "label": labels})
-    dataset = dataset.cast_column("image", DImage())
-    dataset = dataset.cast_column("label", DImage())
-
-    return dataset
-
 def get_bounding_box(ground_truth_map):
     # get bounding box from mask
     y_indices, x_indices = np.where(ground_truth_map > 0)
@@ -30,19 +22,22 @@ def get_bounding_box(ground_truth_map):
     return bbox
     
 class SAMDataset(Dataset):
-    def __init__(self, dataset, processor):
-        self.dataset = dataset
+    def __init__(self, images, labels, processor):
+        self.images = images
+        self.labels = labels
         self.processor = processor
 
     def __len__(self):
-        return len(self.dataset)
+        return len(self.images)
 
     def __getitem__(self, idx):
-        item = self.dataset[idx]
-        image = item["image"]
-        ground_truth_mask = np.array(item["label"])
+        try:
+            idx=idx[0]
+        except:
+            pass
         
-        print(ground_truth_mask.shape)
+        image = self.images[idx]
+        ground_truth_mask = np.array(self.labels[idx])
 
         # get bounding box prompt
         prompt = get_bounding_box(ground_truth_mask)
@@ -55,7 +50,8 @@ class SAMDataset(Dataset):
 
         # add ground truth segmentation
         inputs["ground_truth_mask"] = ground_truth_mask
-
+        
+        # print(inputs)
         return inputs
         
 """PASCAL eval utils"""

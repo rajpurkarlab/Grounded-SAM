@@ -18,7 +18,7 @@ from transformers import SamProcessor
 from linear_probe import LinearProbe
 from model import load_model, preprocess_sam, preprocess_groundingdino_img
 from groundingdino.util.misc import nested_tensor_from_tensor_list
-from utils import create_dataset, get_bounding_box, SAMDataset
+from utils import get_bounding_box, SAMDataset
 
 
 def train(hyparams, output_path, model_paths):
@@ -72,59 +72,54 @@ def compute_segmentation_loss(batch, sam):
         gt_mask=gt_masks[i]
         images.append(transforms.ToPILImage()(img))
         labels.append(gt_mask.numpy())
-    
-    dataset = create_dataset(images, labels)
-    # print(dataset)
+        # print(gt_mask.numpy().shape)
 
     processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
-    train_dataset = SAMDataset(dataset=dataset, processor=processor)
+    train_dataset = SAMDataset(images=images, labels=labels, processor=processor)
     
-    example = train_dataset[0]
-    for k,v in example.items():
-        print(k,v.shape)
-        
-    print("\n\n========\n\n")
+    for name, param in sam.named_parameters():
+        # print(name)
+        if name.startswith("prompt_encoder"):
+            param.requires_grad_(False)
+            # print("FALSE")
     
-    train_dataloader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    batch = next(iter(train_dataloader))
-    for k,v in batch.items():
-        print(k,v.shape)
-    print(batch["ground_truth_mask"].shape)
+    from torch.optim import Adam
+    import monai
+
+    # Note: Hyperparameter tuning could improve performance here
+    optimizer = Adam(sam.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
+
+    seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
     
-    # for name, param in model.named_parameters():
-    #     print(name)
-    #     if name.startswith("prompt_encoder"):
-    #         param.requires_grad_(False)
-    #         print("FALSE")
+    from tqdm import tqdm
+    from statistics import mean
+    # import torch
+    from torch.nn.functional import threshold, normalize
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # model.to(device)
+
+    sam.train()
     
-    # from torch.optim import Adam
-    # import monai
-
-    # # Note: Hyperparameter tuning could improve performance here
-    # optimizer = Adam(model.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
-
-    # seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+    loss = 0
     
-    # from tqdm import tqdm
-    # from statistics import mean
-    # # import torch
-    # from torch.nn.functional import threshold, normalize
+    for i in range(len(train_dataset)):
+        example = train_dataset[i]
+        # for k,v in example.items():
+        #     print(k,v.shape)
+        inputs = {}
+        # inputs["multimodal_"]
+        inputs["image"]=example["pixel_values"].to(device)
+        inputs["boxes"] = example["input_boxes"].to(device)
 
-    # # device = "cuda" if torch.cuda.is_available() else "cpu"
-    # # model.to(device)
+        outputs = sam([inputs], multimask_output=False)
 
-    # sam.train()
-    
-    # outputs = sam(pixel_values=batch["pixel_values"].to(device),
-    #                 input_boxes=batch["input_boxes"].to(device),
-    #                 multimask_output=False)
+        # compute loss
+        predicted_masks = outputs.pred_masks.squeeze(1)
+        ground_truth_masks = example["ground_truth_mask"].float().to("cuda")
+        loss += seg_loss(predicted_masks, ground_truth_masks.unsqueeze(1))
 
-    # # compute loss
-    # predicted_masks = outputs.pred_masks.squeeze(1)
-    # ground_truth_masks = batch["ground_truth_mask"].float().to("cuda")
-    # loss = seg_loss(predicted_masks, ground_truth_masks.unsqueeze(1))
-
-    # return loss
+    return loss
 
 def compute_adaptation_loss(batch, pathologies, groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear):
     """
@@ -260,8 +255,13 @@ class UnitTest:
         print(loss)
     
     def test_seg_loss():
-        # TODO
-        pass
+        from dataset_pascal import load_data
+        dataloader = load_data(tensor=True)
+        groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear = load_model(predictor=False)
+        
+        for i, data in enumerate(dataloader):
+            print(compute_segmentation_loss(data, sam))
+            break
     
     def run_training():
         hyparams = {
@@ -274,13 +274,5 @@ class UnitTest:
 if __name__ == "__main__":
     # unit_test = UnitTest()
     # unit_test.test_adaptation_loss()
-    # unit_test.test_seg_loss()
-    
-    from dataset_pascal import load_data
-    dataloader = load_data(tensor=True)
-    groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear = load_model()
-    
-    for i, data in enumerate(dataloader):
-        compute_segmentation_loss(data, sam)
-        break
+    unit_test.test_seg_loss()
     
