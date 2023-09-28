@@ -128,6 +128,9 @@ class MaskDecoder(nn.Module):
         src = torch.repeat_interleave(image_embeddings, tokens.shape[0], dim=0)
         src = src + dense_prompt_embeddings
         pos_src = torch.repeat_interleave(image_pe, tokens.shape[0], dim=0)
+        src = src.squeeze(dim=0)
+        # print("src.shape: ", src.shape)
+        
         b, c, h, w = src.shape
 
         # Run the transformer

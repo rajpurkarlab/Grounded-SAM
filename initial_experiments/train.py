@@ -16,7 +16,8 @@ from PIL import Image
 from transformers import SamProcessor
 
 from linear_probe import LinearProbe
-from model import load_model, preprocess_sam, preprocess_groundingdino_img
+from model import mySAM, myGroundingDino
+from dataset_mimic import load_data as load_mimic
 from groundingdino.util.misc import nested_tensor_from_tensor_list
 from utils import get_bounding_box, SAMDataset
 
@@ -24,7 +25,7 @@ from utils import get_bounding_box, SAMDataset
 def train(hyparams, output_path, model_paths):
     """Train the model."""
     # Load data and model
-    dataloader = load_data(tensor=True)
+    dataloader = load_mimic(tensor=True)
     groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear = load_model()
     
     optimizers = {}
@@ -60,12 +61,11 @@ def train(hyparams, output_path, model_paths):
     
     return groundingdino, sam, groundingdino_img_linear, groundingdino_txt_linear
 
-def compute_segmentation_loss(batch, sam):
+def compute_segmentation_loss(batch, sam_class):
+    sam = sam_class.model
     batch_images = batch["image"]
     gt_masks = batch["gt_mask"]
-        
-    print("got here")
-
+    
     images = []
     labels = []
     for i, img in enumerate(batch_images):
@@ -84,12 +84,11 @@ def compute_segmentation_loss(batch, sam):
             # print("FALSE")
     
     from torch.optim import Adam
-    import monai
+    # import monai
 
-    # Note: Hyperparameter tuning could improve performance here
-    optimizer = Adam(sam.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
-
-    seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+    from torchmetrics.classification import Dice
+    # seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+    seg_loss = Dice().to('cuda')
     
     from tqdm import tqdm
     from statistics import mean
@@ -109,15 +108,23 @@ def compute_segmentation_loss(batch, sam):
         #     print(k,v.shape)
         inputs = {}
         # inputs["multimodal_"]
+        
+        # print(example["pixel_values"].shape)
+        # print(example["input_boxes"].shape)
+        # print(example["ground_truth_mask"].shape)
+        
         inputs["image"]=example["pixel_values"].to(device)
         inputs["boxes"] = example["input_boxes"].to(device)
+        inputs["original_size"] = example["ground_truth_mask"].shape[-2:]
 
-        outputs = sam([inputs], multimask_output=False)
+        outputs = sam([inputs], multimask_output=False)[0]
 
         # compute loss
-        predicted_masks = outputs.pred_masks.squeeze(1)
-        ground_truth_masks = example["ground_truth_mask"].float().to("cuda")
-        loss += seg_loss(predicted_masks, ground_truth_masks.unsqueeze(1))
+        predicted_masks = outputs["masks"].squeeze(1)
+        # print(predicted_masks.shape)
+        ground_truth_masks = torch.tensor(example["ground_truth_mask"])
+        # print(ground_truth_masks.shape)
+        loss += seg_loss(predicted_masks.to("cuda"), ground_truth_masks.unsqueeze(0).to("cuda"))
 
     return loss
 
@@ -236,34 +243,35 @@ class UnitTest:
     def __init__(self):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
-    def test_adaptation_loss():
-        groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear = load_model(self.device)
+    # def test_adaptation_loss():
+    #     sam = mySAM()
+    #     groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear = load_model(self.device)
         
-        loss = compute_adaptation_loss(
-                    ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
-                    ["Lung lesion"],
-                    groundingdino,
-                    sam,
-                    biomedclip,
-                    tokenizer,
-                    preprocess_train,
-                    grounding_dino_linear,
-                    grounding_dino_linear_txt,
-                    sam_linear
-                )
+    #     loss = compute_adaptation_loss(
+    #                 ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+    #                 ["Lung lesion"],
+    #                 groundingdino,
+    #                 sam,
+    #                 biomedclip,
+    #                 tokenizer,
+    #                 preprocess_train,
+    #                 grounding_dino_linear,
+    #                 grounding_dino_linear_txt,
+    #                 sam_linear
+    #             )
         
-        print(loss)
+    #     print(loss)
     
-    def test_seg_loss():
+    def test_seg_loss(self):
         from dataset_pascal import load_data
         dataloader = load_data(tensor=True)
-        groundingdino, sam, biomedclip, tokenizer, preprocess_train, groundingdino_img_linear, groundingdino_txt_linear, sam_linear = load_model(predictor=False)
+        sam = mySAM()
         
         for i, data in enumerate(dataloader):
             print(compute_segmentation_loss(data, sam))
             break
     
-    def run_training():
+    def run_training(self):
         hyparams = {
             "lr": 1e-4,
             "epochs": 1,
@@ -272,7 +280,7 @@ class UnitTest:
         
 
 if __name__ == "__main__":
-    # unit_test = UnitTest()
+    unit_test = UnitTest()
     # unit_test.test_adaptation_loss()
     unit_test.test_seg_loss()
     

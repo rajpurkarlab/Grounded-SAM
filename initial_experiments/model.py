@@ -65,21 +65,32 @@ class myGroundingDino:
             self.txt_linear.load_state_dict(torch.load(txt_linear_ckpt, map_location=device))
 
 
-    def preprocess_img(self, image_path):
-        """Preprocess image for Grounding Dino."""
-        _, image = load_image(image_path)
+    def preprocess_img(self, image_paths):
+        """Preprocess image for Grounding Dino.
+        
+        Inputs:
+            - image_paths: list of image paths
+        """
         transform = torchvision.transforms.Compose([
             torchvision.transforms.Resize((224, 224)),
         ])
-        image = transform(image)
-        image = nested_tensor_from_tensor_list([image]).to(self.device)
-        return image.to(self.device)
+
+        images = []
+        for image_path in image_paths:
+            _, image = load_image(image_path)
+            images.append(transform(image))
+
+        # Convert tensor to nested tensor
+        images = nested_tensor_from_tensor_list(images).to(self.device)
+        print(images.shape)
+
+        return images.to(self.device)
     
 
     def get_img_emb(self, image_path):
         """Get image embedding for Grounding Dino."""
         # Preprocess
-        img = self.preprocess_img(image_path, self.device)
+        img = self.preprocess_img(image_path)
         
         # Run backbone
         backbone_output, _ = self.model.backbone(img)
@@ -168,15 +179,23 @@ class myBiomedCLIP:
             self.model.load_state_dict(torch.load(ckpt_file, map_location=device))
 
     
-    def preprocess_img(self, image_path):
-        """Preprocess image for Biomed CLIP."""
-        bmc_img = self.preprocess(Image.open(image_path)).unsqueeze(0).to(self.device)
-        return bmc_img
+    def preprocess_img(self, image_paths):
+        """Preprocess image for Biomed CLIP.
+        
+        Inputs:
+            - image_paths: list of image paths
+        """
+        images = []
+        for image_path in image_paths:
+            bmc_img = self.preprocess(Image.open(image_path)).to(self.device)
+            images.append(bmc_img)
+        images = torch.stack(images)
+        return images
     
 
     def get_img_emb(self, image_path):
         """Get image embedding for Biomed CLIP"""
-        bmc_img = self.preprocess_img(image_path, self.device)
+        bmc_img = self.preprocess_img(image_path)
         bmc_img_embedding = self.model.visual(bmc_img)
         return bmc_img_embedding
 
@@ -220,13 +239,24 @@ class mySAM:
             self.img_linear.load_state_dict(torch.load(img_linear_ckpt, map_location=device))
 
 
-    def preprocess_img(self, image_path):
-        """Preprocess image for SAM."""
+    def preprocess_img(self, image_paths):
+        """Preprocess image for SAM.
+        
+        Inputs:
+            - image_paths: list of image paths
+        """
+        
+
+        images = []
+        for image_path in image_paths:
+            input_image = Image.open(image_path) 
+            images.append(input_image)
+        images = torch.stack(images)
+
         transform = torchvision.transforms.Compose([
             torchvision.transforms.Resize((20, 20)),
             torchvision.transforms.ToTensor()
         ])
-        input_image = Image.open(image_path) 
         input_image_torch = transform(input_image).to(self.device)
 
         x = input_image_torch
@@ -238,7 +268,7 @@ class mySAM:
     
     def get_img_emb(self, image_path):
         """Get image embedding for SAM"""
-        sam_img = self.preprocess_img(image_path, self.device)
+        sam_img = self.preprocess_img(image_path)
         sam_img_embedding = self.model.image_encoder(sam_img)
         return sam_img_embedding
 
@@ -268,7 +298,7 @@ class UnitTest:
 
     def __init__(self):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.img_path = "./initial_experiments/toy_data/chest_x_ray.jpeg"
+        self.img_path = ["./initial_experiments/toy_data/chest_x_ray.jpeg"]
         self.text = "This is a image a 2 lungs."
     
     
@@ -355,11 +385,11 @@ class UnitTest:
 if __name__ == "__main__":
     unit_test = UnitTest()
 
-    unit_test.test_grounding_dino()
-    unit_test.test_grounding_dino_save()
+    # unit_test.test_grounding_dino()
+    # unit_test.test_grounding_dino_save()
 
-    unit_test.test_biomed_clip()
-    unit_test.test_biomed_clip_save()
+    # unit_test.test_biomed_clip()
+    # unit_test.test_biomed_clip_save()
 
     unit_test.test_sam()
     unit_test.test_sam_save()
