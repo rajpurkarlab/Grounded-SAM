@@ -24,6 +24,7 @@ class MIMICCXRDataset(Dataset):
             root_dir (string): Directory with all the images.
             transform (callable, optional): Optional transform to be applied
                 on a sample.
+            tensors (boolean): If true, return image as tensor. If false, don't return image (much faster).
         """
         self.dataframe = pd.read_csv(csv_file)
         self.dataframe.dropna(subset=['report'], inplace=True)
@@ -58,22 +59,22 @@ class MIMICCXRDataset(Dataset):
         
         return sample
 
-def load_data(batch_size=16, tensor=False):
+def load_data(batch_size=16, tensor=False, num_workers=0):
     """Get dataloader for training.
     """
     dataset = MIMICCXRDataset(tensor=tensor)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
 class UnitTest:
     def __init__(self):
         pass
 
     def load_data_test(self):
-        dataloader = load_data(tensor=True)
+        dataloader = load_data(tensor=False)
 
         print("Number of batches:", len(dataloader))
         for i, data in enumerate(dataloader):
-            images = data["image"]
+            # images = data["image"]
             image_paths = data["image_path"]
             report = data["report"]
         print("Passed all tests")

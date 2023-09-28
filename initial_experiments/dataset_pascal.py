@@ -20,6 +20,9 @@ class PASCALDataset(Dataset):
     """PASCAL VOC dataset."""
 
     def __init__(self, size=(256,256), tensor=True):
+        """
+        tensors (boolean): If true, return image as tensor. If false, don't return image (much faster).
+        """
         self.train_id_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/train.txt'
         self.class_name_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/class_names.txt'
         self.img_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages'
@@ -72,22 +75,22 @@ class PASCALDataset(Dataset):
                 
         return self.samples[idx]
 
-def load_data(batch_size=16, tensor=False):
+def load_data(batch_size=16, tensor=False, num_workers=0):
     """Get dataloader for training.
     """
     dataset = PASCALDataset(tensor=tensor)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
 class UnitTest:
     def __init__(self):
         pass
 
     def load_data_test(self):
-        dataloader = load_data(tensor=True)
+        dataloader = load_data(tensor=False)
 
         print("Number of batches:", len(dataloader))
         for i, data in enumerate(dataloader):
-            images = data["image"]
+            # images = data["image"]
             masks = data["gt_mask"]
         print("Passed all tests")
 
