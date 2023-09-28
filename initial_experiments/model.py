@@ -21,7 +21,7 @@ from models.GroundingDINO.groundingdino.util.inference import load_image, load_m
 from linear_probe import LinearProbe
 
 
-class MyGroundingDino:
+class myGroundingDino:
     
     def __init__(
         self,
@@ -274,7 +274,7 @@ class UnitTest:
     
     def test_grounding_dino(self):
         # Load model
-        grounding_dino = MyGroundingDino()
+        grounding_dino = myGroundingDino()
 
         # Generate embedding
         groundingdino_img_embedding = grounding_dino.get_img_emb(self.img_path)
@@ -295,13 +295,13 @@ class UnitTest:
 
     def test_grounding_dino_save(self):
         # Load model
-        grounding_dino = MyGroundingDino()
+        grounding_dino = myGroundingDino()
 
         # Save model
         grounding_dino.save_model()
 
         # Load model with saved checkpoint
-        grounding_dino = MyGroundingDino(
+        grounding_dino = myGroundingDino(
             ckpt_file="./initial_experiments/ckpts/groundingdino_backbone.pth",
             img_linear_ckpt="./initial_experiments/ckpts/groundingdino_img_linear.pth", 
             txt_linear_ckpt="./initial_experiments/ckpts/groundingdino_txt_linear.pth"
