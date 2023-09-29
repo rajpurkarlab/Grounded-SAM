@@ -47,10 +47,10 @@ class LinearProbe(torch.nn.Module):
         output_emb = []
         for i, layer in enumerate(self.linear_layers):
             emb = input_emb[i]
-            emb = emb.squeeze()
-            if len(emb.shape) >= 3: # average pooling for image [C, H, W], not for text [C, D]
-                emb = torch.mean(emb, dim=(0))
-            emb = emb.reshape(1, -1)
+            if len(emb.shape) > 3: # average pooling for image [C, H, W], not for text [C, D]
+                emb = torch.mean(emb, dim=(1))
+            
+            emb = emb.reshape(emb.shape[0], -1)
             out = layer(emb)
             output_emb.append(out)
         
@@ -64,22 +64,24 @@ def linear_probe_tests():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Create dummy embeddings.
+    batch_size = 1
     grounding_dino_emb = [
-        torch.randn(1, 256, 80, 80).to(device),
-        torch.randn(1, 512, 40, 40).to(device),
-        torch.randn(1, 1024, 20, 20).to(device),
+        torch.randn(batch_size, 256, 80, 80).to(device),
+        torch.randn(batch_size, 512, 40, 40).to(device),
+        torch.randn(batch_size, 1024, 20, 20).to(device),
     ]
     grounding_dino_text_emb = [
-        torch.randn(1, 195, 256).to(device),
+        torch.randn(batch_size, 195, 256).to(device),
     ]
-    sam_emb = [torch.randn(1, 256, 64, 64).to(device)]
-    biomed_clip_emb = torch.randn(1, 512).to(device)
+    sam_emb = [torch.randn(batch_size, 256, 64, 64).to(device)]
+    biomed_clip_emb = torch.randn(batch_size, 512).to(device)
 
     # Create linear layers.
+    placeholder_bs = 2
     grounding_dino_input_dims = [
-        [1, 256, 80, 80],
-        [1, 512, 40, 40],
-        [1, 1024, 20, 20],
+        [placeholder_bs, 256, 80, 80],
+        [placeholder_bs, 512, 40, 40],
+        [placeholder_bs, 1024, 20, 20],
     ]
     grounding_dino_linear = LinearProbe(
         grounding_dino_input_dims,
@@ -88,7 +90,7 @@ def linear_probe_tests():
         )
 
     grounding_dino_text_input_dims = [
-        [1, 195, 256]
+        [placeholder_bs, 195, 256]
     ]
     grounding_dino_text_linear = LinearProbe(
         grounding_dino_text_input_dims,
@@ -97,7 +99,7 @@ def linear_probe_tests():
     )
 
     sam_input_dims = [
-        [1, 256, 64, 64]
+        [placeholder_bs, 256, 64, 64]
     ]
     sam_linear = LinearProbe(
         sam_input_dims, 

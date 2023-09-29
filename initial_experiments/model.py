@@ -141,7 +141,7 @@ class myGroundingDino:
 
     def align_txt_emb(self, groundingdino_txt_embedding):
         """Align text embedding to 512."""
-        groundingdino_txt_embedding = self.txt_linear(groundingdino_txt_embedding)
+        groundingdino_txt_embedding = self.txt_linear([groundingdino_txt_embedding])
         return groundingdino_txt_embedding
     
 
@@ -246,24 +246,23 @@ class mySAM:
             - image_paths: list of image paths
         """
         
-
         images = []
         for image_path in image_paths:
             input_image = Image.open(image_path) 
             images.append(input_image)
-        images = torch.stack(images)
 
         transform = torchvision.transforms.Compose([
             torchvision.transforms.Resize((20, 20)),
             torchvision.transforms.ToTensor()
         ])
-        input_image_torch = transform(input_image).to(self.device)
+        input_image_torch = [transform(img).to(self.device) for img in images]
+        input_image_torch = torch.stack(input_image_torch)
 
         x = input_image_torch
         pixel_mean = [123.675, 116.28, 103.53]
         pixel_std = [58.395, 57.12, 57.375]
         x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(self.device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(self.device)
-        return x[None, :, :, :]
+        return x
 
     
     def get_img_emb(self, image_path):
@@ -275,7 +274,7 @@ class mySAM:
 
     def align_img_emb(self, sam_img_embedding):
         """Align image embedding to 512."""
-        sam_img_embedding = self.img_linear(sam_img_embedding)
+        sam_img_embedding = self.img_linear([sam_img_embedding])
         return sam_img_embedding
 
 
@@ -298,8 +297,14 @@ class UnitTest:
 
     def __init__(self):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.img_path = ["./initial_experiments/toy_data/chest_x_ray.jpeg"]
-        self.text = "This is a image a 2 lungs."
+        self.img_path = [
+            "./initial_experiments/toy_data/chest_x_ray.jpeg",
+            # "./initial_experiments/toy_data/chest_x_ray_2.jpeg"
+        ]
+        self.text = [
+            "This is a image a 2 lungs.",
+            # "This patient has symptom of pneumonia.",
+        ]
     
     
     def test_grounding_dino(self):
@@ -385,11 +390,11 @@ class UnitTest:
 if __name__ == "__main__":
     unit_test = UnitTest()
 
-    # unit_test.test_grounding_dino()
+    unit_test.test_grounding_dino()
     # unit_test.test_grounding_dino_save()
 
-    # unit_test.test_biomed_clip()
+    unit_test.test_biomed_clip()
     # unit_test.test_biomed_clip_save()
 
     unit_test.test_sam()
-    unit_test.test_sam_save()
+    # unit_test.test_sam_save()
