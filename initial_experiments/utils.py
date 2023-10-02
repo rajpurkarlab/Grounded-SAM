@@ -20,39 +20,6 @@ def get_bounding_box(ground_truth_map):
     y_max = min(H, y_max + np.random.randint(0, 20))
     bbox = [x_min, y_min, x_max, y_max]
     return bbox
-    
-class SAMDataset(Dataset):
-    def __init__(self, images, labels, processor):
-        self.images = images
-        self.labels = labels
-        self.processor = processor
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, idx):
-        try:
-            idx=idx[0]
-        except:
-            pass
-        
-        image = self.images[idx]
-        ground_truth_mask = np.array(self.labels[idx])
-
-        # get bounding box prompt
-        prompt = get_bounding_box(ground_truth_mask)
-
-        # prepare image and prompt for the model
-        inputs = self.processor(image, input_boxes=[[prompt]], return_tensors="pt")
-
-        # remove batch dimension which the processor adds by default
-        inputs = {k:v.squeeze(0) for k,v in inputs.items()}
-
-        # add ground truth segmentation
-        inputs["ground_truth_mask"] = ground_truth_mask
-        
-        # print(inputs)
-        return inputs
         
 """PASCAL eval utils"""
 

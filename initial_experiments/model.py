@@ -82,8 +82,6 @@ class myGroundingDino:
 
         # Convert tensor to nested tensor
         images = nested_tensor_from_tensor_list(images).to(self.device)
-        print(images.shape)
-
         return images.to(self.device)
     
 
@@ -299,11 +297,11 @@ class UnitTest:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.img_path = [
             "./initial_experiments/toy_data/chest_x_ray.jpeg",
-            # "./initial_experiments/toy_data/chest_x_ray_2.jpeg"
+            "./initial_experiments/toy_data/chest_x_ray_2.jpeg"
         ]
         self.text = [
             "This is a image a 2 lungs.",
-            # "This patient has symptom of pneumonia.",
+            "This patient has symptom of pneumonia.",
         ]
     
     

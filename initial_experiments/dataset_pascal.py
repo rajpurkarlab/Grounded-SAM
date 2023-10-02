@@ -13,13 +13,14 @@ from linear_probe import LinearProbe
 import torch
 from torchvision import transforms
 from PIL import Image
+from transformers import SamProcessor
 
-from utils import get_queries
+from utils import get_queries, get_bounding_box
 
 class PASCALDataset(Dataset):
     """PASCAL VOC dataset."""
 
-    def __init__(self, size=(256,256), tensor=True):
+    def __init__(self, size=(256,256)):
         """
         tensors (boolean): If true, return image as tensor. If false, don't return image (much faster).
         """
@@ -27,6 +28,7 @@ class PASCALDataset(Dataset):
         self.class_name_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/class_names.txt'
         self.img_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages'
         self.gt_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/SegmentationClass'
+        self.processor = processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
     
         # Load class names
         self.class_names = []
@@ -40,7 +42,6 @@ class PASCALDataset(Dataset):
             self.train_ids.append(id)
         
         self.size = size
-        self.tensor = tensor
         
         self.samples = []
         
@@ -52,19 +53,27 @@ class PASCALDataset(Dataset):
             
             gt_masks = get_queries(gt_path, self.size)
 
-            if self.tensor:
-                img = Image.open(img_path)
-                img = img.resize(self.size)
-                gt_img = Image.open(gt_path)
-                gt_img = gt_img.resize(self.size)
-                convert_tensor = transforms.ToTensor()
-                                
-                for val in gt_masks:
-                    self.samples.append({'image': convert_tensor(img), 'image_path': img_path, 'gt_mask': gt_masks[val]})
+            img = Image.open(img_path)
+            img = img.resize(self.size)
+                            
+            for val in gt_masks:
+                ground_truth_mask = gt_masks[val]
+                
+                prompt = get_bounding_box(ground_truth_mask)
             
-            else:
-                for val in gt_masks:
-                    self.samples.append({'image_path': img_path, 'gt_mask': gt_masks[val]})
+                # prepare image and prompt for the model
+                inputs = self.processor(img, input_boxes=[[prompt]], return_tensors="pt")
+
+                # remove batch dimension which the processor adds by default
+                inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
+                # add ground truth segmentation
+                inputs["ground_truth_mask"] = ground_truth_mask
+                
+                # inputs["image"] = img
+                # inputs["image_path"] = img_path
+                
+                self.samples.append(inputs)
             
     def __len__(self):
         return len(self.samples)
@@ -75,22 +84,26 @@ class PASCALDataset(Dataset):
                 
         return self.samples[idx]
 
-def load_data(batch_size=16, tensor=False, num_workers=0):
+def load_data(batch_size=16, num_workers=0):
     """Get dataloader for training.
     """
-    dataset = PASCALDataset(tensor=tensor)
+    dataset = PASCALDataset()
     return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+
+def get_len():
+    dataset = PASCALDataset()
+    return len(dataset)
 
 class UnitTest:
     def __init__(self):
         pass
 
     def load_data_test(self):
-        dataloader = load_data(tensor=False)
+        dataloader = load_data()
 
         print("Number of batches:", len(dataloader))
         for i, data in enumerate(dataloader):
-            # images = data["image"]
+            images = data["image"]
             masks = data["gt_mask"]
         print("Passed all tests")
 
