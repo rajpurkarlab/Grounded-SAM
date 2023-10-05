@@ -71,7 +71,7 @@ class UnitTest:
         pass
 
     def load_data_test(self):
-        dataloader = load_data(tensor=False)
+        num_samples, dataloader = load_data(tensor=False)
 
         print("Number of batches:", len(dataloader))
         for i, data in enumerate(dataloader):
