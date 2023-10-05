@@ -8,6 +8,7 @@ import os
 import torch
 import pandas as pd
 import numpy as np
+import wandb
 from tqdm.auto import tqdm
 import torch
 import torch.nn.functional as F
@@ -46,6 +47,20 @@ def train(hyperparams):
     use_sam = hyperparams['use_sam']
     device = hyperparams['device']
     save_folder = hyperparams['save_folder']
+    log_to_wandb = hyperparams['log_to_wandb']
+
+    # Intialize wandb
+    if log_to_wandb:
+        run = wandb.init(
+                entity="img-txt-localize",
+                project="img-txt-localize",
+                config={
+                    "use_sam": use_sam,
+                    "epochs": num_epochs,
+                    "learning_rate": lr,
+                    "batch_size": batch_size,
+                }
+            )
 
     # Load data
     num_mimic_samples, mimic_dataloader = load_mimic(batch_size=batch_size, tensor=False, num_workers=num_workers)
@@ -53,18 +68,6 @@ def train(hyperparams):
     # print(get_len())
     # print(int(get_len()/(num_mimic_batches / batch_size)))
     # pascal_dataloader = load_pascal(batch_size=int(get_len()/(num_mimic_batches / batch_size)), num_workers=num_workers)
-
-    # Load model
-    my_groundingdino = myGroundingDino(
-        config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
-        ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
-        device=device,
-    )
-    my_sam = mySAM(
-        ckpt_file="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
-        device=device,
-    )
-    my_biomedclip = myBiomedCLIP(device=device)
 
     # Load model
     my_groundingdino = myGroundingDino(
@@ -93,11 +96,6 @@ def train(hyperparams):
     print("\nLoaded models!\n")
     
     # Training loop
-    groundingdino_img_similarity_list = []
-    groundingdino_txt_similarity_list = []
-    sam_img_similarity_list = []
-    loss_list = []
-
     for epoch in range(num_epochs):
         
         # it = iter(pascal_dataloader)
@@ -115,6 +113,17 @@ def train(hyperparams):
             # loss_segmentation = compute_segmentation_loss(next(it), my_sam)
             loss_segmentation = torch.tensor(0.0)
             loss = loss_adaptation + loss_segmentation
+
+            # Log to wandb
+            if log_to_wandb:
+                wandb.log({
+                        "loss": loss,
+                        "loss_adaptation": loss_adaptation,
+                        "loss_segmentation": loss_segmentation,
+                        "groundingdino_img_similarity": groundingdino_img_similarity,
+                        "groundingdino_txt_similarity": groundingdino_txt_similarity,
+                        "sam_img_similarity": sam_img_similarity,
+                    })
             
             # Training step
             loss.backward()
@@ -133,6 +142,17 @@ def train(hyperparams):
                         backbone_file=f"initial_experiments_sam_{save_every}.pth",
                         img_linear_ckpt=f"initial_experiments_sam_img_linear_{save_every}.pth",
                     )
+
+        # Evaluation - TODO
+        miou_train, miou_val = 0, 0
+        if log_to_wandb:
+            wandb.log({
+                "miou_train": miou_train, 
+                "miou_val": miou_val,
+                })
+
+    # Finish wandb session
+    wandb.finish()
 
 
 def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedclip, my_sam):
@@ -227,6 +247,7 @@ class UnitTest:
             "save_every": 1000,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
+            "log_to_wandb": True
         }
         train(hyperparams)
         

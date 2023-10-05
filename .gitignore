@@ -136,3 +136,6 @@ outputs/
 
 *.json
 datasets/*
+
+# wandb
+/wandb
