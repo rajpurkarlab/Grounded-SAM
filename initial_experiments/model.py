@@ -54,7 +54,7 @@ class myGroundingDino:
 
         # Load linear probe for Grounding Dino text embedding
         groundingdino_txt_dims = [
-            [1, 195, 256]
+            [1, 256, 256]
         ]
         self.txt_linear = LinearProbe(
             groundingdino_txt_dims,
@@ -101,7 +101,7 @@ class myGroundingDino:
     def get_txt_emb(self, text):
         """Get text embedding for Grounding Dino."""
         # Tokenize
-        tokenized = self.model.tokenizer(text, padding="max_length", max_length=195, return_tensors="pt")
+        tokenized = self.model.tokenizer(text, padding="max_length", max_length=256, return_tensors="pt")
         for key, value in tokenized.items():
             tokenized[key] = value.to(self.device)
 

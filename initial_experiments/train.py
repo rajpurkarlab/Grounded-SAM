@@ -4,14 +4,35 @@ Iteratively train between adaptation and segmentation objectives:
     - Adaptation: train Grounded SAM to align with frozen biomed CLIP using medical dataset.
     - Segmentation: train Grounded SAM with its original objective using natural dataset.
 """
-
+import os
 import torch
+import pandas as pd
+import numpy as np
+from tqdm.auto import tqdm
+import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchmetrics.classification import Dice
+from PIL import Image
+from transformers import SamProcessor
 
-from model import mySAM, myGroundingDino, myBiomedCLIP
+from model import myGroundingDino, myBiomedCLIP, mySAM
 from dataset_mimic import load_data as load_mimic
-from dataset_pascal import load_data as load_pascal, get_len
+from dataset_pascal import load_data as load_pascal
+
+# seed
+seed_value = 42
+import random
+random.seed(seed_value)
+np.random.seed(seed_value)
+torch.manual_seed(seed_value)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed_value)
+    torch.cuda.manual_seed_all(seed_value)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 
 def train(hyperparams):
     """Train the model."""
@@ -21,24 +42,38 @@ def train(hyperparams):
     batch_size = hyperparams['batch_size']
     num_epochs = hyperparams['num_epochs']
     num_workers = hyperparams['num_workers']
+    save_every = hyperparams['save_every']
+    use_sam = hyperparams['use_sam']
     device = hyperparams['device']
     save_folder = hyperparams['save_folder']
 
     # Load data
-    len_mimic, mimic_dataloader = load_mimic(batch_size=batch_size, num_workers=num_workers)
-    print(len_mimic / batch_size)
-    print(get_len())
-    print(int(get_len()/(len_mimic / batch_size)))
-    pascal_dataloader = load_pascal(batch_size=int(get_len()/(len_mimic / batch_size)), num_workers=num_workers)
+    num_mimic_samples, mimic_dataloader = load_mimic(batch_size=batch_size, tensor=False, num_workers=num_workers)
+    # print(num_mimic_batches / batch_size)
+    # print(get_len())
+    # print(int(get_len()/(num_mimic_batches / batch_size)))
+    # pascal_dataloader = load_pascal(batch_size=int(get_len()/(num_mimic_batches / batch_size)), num_workers=num_workers)
 
     # Load model
     my_groundingdino = myGroundingDino(
-        config_file="./ckpts/GroundingDINO_SwinT_OGC.py",
-        ckpt_file="./ckpts/groundingdino_swint_ogc.pth",
+        config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
+        ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
         device=device,
     )
     my_sam = mySAM(
-        ckpt_file="./ckpts/sam_vit_l_0b3195.pth",
+        ckpt_file="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
+        device=device,
+    )
+    my_biomedclip = myBiomedCLIP(device=device)
+
+    # Load model
+    my_groundingdino = myGroundingDino(
+        config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
+        ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
+        device=device,
+    )
+    my_sam = mySAM(
+        ckpt_file="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
         device=device,
     )
     my_biomedclip = myBiomedCLIP(device=device)
@@ -55,27 +90,76 @@ def train(hyperparams):
     my_sam.model.train()
     my_sam.img_linear.train()
     my_biomedclip.model.eval()
-
     print("\nLoaded models!\n")
     
     # Training loop
+    groundingdino_img_similarity_list = []
+    groundingdino_txt_similarity_list = []
+    sam_img_similarity_list = []
+    loss_list = []
+
     for epoch in range(num_epochs):
-        it = iter(pascal_dataloader)
-        for data in tqdm(mimic_dataloader, desc=f'Training @ epoch {epoch+1} of {num_epochs}'):
+        
+        # it = iter(pascal_dataloader)
+        for i, data in enumerate(tqdm(mimic_dataloader, desc=f'Training @ epoch {epoch+1} of {num_epochs}')):
+            optimizer.zero_grad()
+
             # Load data
             image_paths = data["image_path"]
-            report = data["report"]
+            reports = data["report"]
 
+            # Compte loss
+            loss_adaptation, groundingdino_img_similarity, groundingdino_txt_similarity, sam_img_similarity = compute_adaptation_loss(
+                image_paths, reports, my_groundingdino, my_biomedclip, my_sam
+            )
+            # loss_segmentation = compute_segmentation_loss(next(it), my_sam)
+            loss_segmentation = torch.tensor(0.0)
+            loss = loss_adaptation + loss_segmentation
+            
             # Training step
-            optimizer.zero_grad()
-            loss = compute_segmentation_loss(next(it), my_sam) 
-                                                                # + compute_adaptation_loss(image_paths, report, my_groundingdino, my_sam, my_biomedclip)
             loss.backward()
             optimizer.step()
+            if i % (save_every+1) == 0:
+                # Save model
+                my_groundingdino.save_model(
+                    ckpt_folder=save_folder,
+                    backbone_ckpt=f"initial_experiments_groundingdino_backbone_{save_every}.pth",
+                    img_linear_ckpt=f"initial_experiments_groundingdino_img_linear_{save_every}.pth",
+                    txt_linear_ckpt=f"initial_experiments_groundingdino_txt_linear_{save_every}.pth",
+                )
+                if use_sam:
+                    my_sam.save_model(
+                        ckpt_folder=save_folder,
+                        backbone_file=f"initial_experiments_sam_{save_every}.pth",
+                        img_linear_ckpt=f"initial_experiments_sam_img_linear_{save_every}.pth",
+                    )
 
-    # Save model
-    my_groundingdino.save_model(ckpt_folder=save_folder)
-    my_sam.save_model(ckpt_folder=save_folder)
+
+def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedclip, my_sam):
+    """Compute adaptation loss between grounding dino and biomedclip + between sam and biomedclip."""
+    # Get embeddings
+    groundingdino_img_emb = my_groundingdino.get_img_emb(image_paths)
+    groundingdino_img_emb = my_groundingdino.align_img_emb(groundingdino_img_emb)
+    groundingdino_txt_emb = my_groundingdino.get_txt_emb(reports)
+    groundingdino_txt_emb = my_groundingdino.align_txt_emb(groundingdino_txt_emb)
+
+    with torch.no_grad(): # BiomedCLIP is kept frozen
+        bmc_img_embedding = my_biomedclip.get_img_emb(image_paths)
+        bmc_txt_embedding = my_biomedclip.get_txt_emb(reports)
+    
+    if my_sam:
+        sam_img_embedding = my_sam.get_img_emb(image_paths)
+        sam_img_embedding = my_sam.align_img_emb(sam_img_embedding)
+
+    # Get loss - cosine similarity (consider using InfoNCE loss if we can have larger batch sizes)
+    groundingdino_img_similarity = F.cosine_similarity(groundingdino_img_emb, bmc_img_embedding).mean()
+    groundingdino_txt_similarity = F.cosine_similarity(groundingdino_txt_emb, bmc_txt_embedding).mean()
+    sam_img_similarity = torch.tensor(0.0)
+    if my_sam:
+        sam_img_similarity = F.cosine_similarity(sam_img_embedding, bmc_img_embedding).mean()
+    loss = -(groundingdino_img_similarity + groundingdino_txt_similarity + sam_img_similarity)
+    return (loss, groundingdino_img_similarity, groundingdino_txt_similarity, sam_img_similarity)
+
     
 def compute_segmentation_loss(batch, sam_class):
     sam = sam_class.model
@@ -105,80 +189,6 @@ def compute_segmentation_loss(batch, sam_class):
 
     return loss
 
-def compute_adaptation_loss(batch, pathologies, groundingdino, sam, biomedclip):
-    """
-    batch: list of image paths
-    pathologies: list of pathologies
-    """
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    bmi = []
-    bmt = []
-    si = []
-    gdi = []
-    gdt = []
-    
-    groundingdino_txt_emb = groundingdino.get_txt_emb(pathologies)
-    
-    for i in range(len(batch)):
-        emb = groundingdino_txt_emb[i, :][None, :]
-        gdt.append(groundingdino.align_txt_emb(emb).squeeze())
-     
-    for i, image_path in enumerate(batch):
-        gd_img_emb = groundingdino.get_img_emb([image_path])
-        sam_img_emb = sam.get_img_emb([image_path])
-        
-        with torch.no_grad():
-            biomedclip_img_emb = biomedclip.get_img_emb([image_path])
-            biomedclip_txt_emb = biomedclip.get_txt_emb(pathologies[i])
-            bmi.append(biomedclip_img_emb.to(device).squeeze())
-            bmt.append(biomedclip_txt_emb.to(device).squeeze())
-
-        grounding_dino_emb_aligned = groundingdino.align_img_emb(gd_img_emb)
-        gdi.append(grounding_dino_emb_aligned.squeeze())
-        
-        sam_emb_aligned = sam.align_img_emb(sam_img_emb)
-        si.append(sam_emb_aligned.squeeze())
-            
-    bmi = torch.stack(bmi)
-    bmt = torch.stack(bmt)
-    si = torch.stack(si)
-    gdi = torch.stack(gdi)
-    gdt = torch.stack(gdt)
-            
-    path2list = {}
-    path2list_t = {}
-    bmif = []
-    bmtf = []
-    uniq = list(set(pathologies))
-    for path in uniq:
-        l = []
-        t = []
-        for i, p in enumerate(pathologies):
-            if p == path:
-                l.append(bmi[i])
-                t.append(bmt[i])
-        path2list[path] = l
-        path2list_t[path] = t
-        
-    for i, path in enumerate(pathologies):
-        l = []
-        t = []
-        for p in uniq:
-            if p != path:
-                l += path2list[p]
-                t += path2list_t[p]
-        bmif.append(torch.stack(l))
-        bmtf.append(torch.stack(t))
-    
-    bmif = torch.stack(bmif)
-    bmtf = torch.stack(bmtf)
-    
-    loss = InfoNCE(negative_mode='paired')
-    loss_sam = loss(si, bmi, bmif)
-    loss_groundingdino_img = loss(gdi, bmi, bmif)
-    loss_groundingdino_txt = loss(gdt, bmt, bmtf)
-    
-    return loss_sam + loss_groundingdino_img + loss_groundingdino_txt
 
 class UnitTest:
     def __init__(self):
@@ -193,10 +203,9 @@ class UnitTest:
                     ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
                     ["Lung lesion"],
                     groundingdino,
+                    biomedclip,
                     sam,
-                    biomedclip
                 )
-        
         print(loss)
     
     def test_seg_loss(self):
@@ -211,11 +220,13 @@ class UnitTest:
     def run_training(self):
         hyperparams = {
             "lr": 1e-4,
-            "batch_size": 16,
+            "batch_size": 1,
             "num_epochs": 1,
             "num_workers": 4,
+            "use_sam": True,
+            "save_every": 1000,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-            "save_folder": "./ckpts/",
+            "save_folder": "./initial_experiments/ckpts/",
         }
         train(hyperparams)
         
@@ -223,4 +234,5 @@ class UnitTest:
 if __name__ == "__main__":
     unit_test = UnitTest()
     unit_test.run_training()
+    # unit_test.test_adaptation_loss()
     # unit_test.test_seg_loss()
