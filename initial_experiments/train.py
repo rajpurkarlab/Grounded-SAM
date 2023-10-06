@@ -128,8 +128,9 @@ def train(hyperparams):
             # Training step
             loss.backward()
             optimizer.step()
+            
+            # Save model
             if i % (save_every+1) == 0:
-                # Save model
                 my_groundingdino.save_model(
                     ckpt_folder=save_folder,
                     backbone_ckpt=f"initial_experiments_groundingdino_backbone_{save_every}.pth",
@@ -142,6 +143,7 @@ def train(hyperparams):
                         backbone_file=f"initial_experiments_sam_{save_every}.pth",
                         img_linear_ckpt=f"initial_experiments_sam_img_linear_{save_every}.pth",
                     )
+
 
         # Evaluation - TODO
         miou_train, miou_val = 0, 0
