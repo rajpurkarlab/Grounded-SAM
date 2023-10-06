@@ -18,6 +18,7 @@ import pycocotools.mask as mask_util
 import argparse
 import sys
 import numpy as np
+from tqdm import tqdm
 
 from utils import PROMPTS, get_iou, get_queries
 from models.grounded_sam import run_grounded_sam, env_setup, load_models
@@ -123,21 +124,24 @@ def eval_pascal(model, GRADCAM):
     return mIoU
 
 def eval_chexlocalize(model, GRADCAM):
+    # Load model
     if model == "grounded-sam":
         env_setup()
-        # groundingdino_model, sam_predictor = load_models()
         groundingdino_model, sam_predictor, _, _, _, _, _, _ = load_model(predictor=True)
     elif model == "biovil":
         pass
     else:
         raise NotImplementedError(f"Model {model} not supported")
 
+    # Load CheXlocalize test set
+    json_obj = json.load(open("datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"))
+
     iou_results = {prompt: [] for prompt in PROMPTS}
-
-    json_obj = json.load(open("datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json")) # Load CheXlocalize test set
-
-    for obj in json_obj: # Loop through all test samples: (pathology, image, ground-truth mask) tuples
+    # Loop through all test samples (pathology, image, ground-truth mask) tuples
+    for obj in tqdm(json_obj):
         filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
+        
+        # Loop through all pathologies in a test sample
         for query in json_obj[obj]:
             if query not in PROMPTS:
                 continue
@@ -150,7 +154,7 @@ def eval_chexlocalize(model, GRADCAM):
 
                 text_prompt = PROMPTS[query]
 
-                # try:
+                # Get predicted mask
                 if model == "grounded-sam":
                     pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model.to('cuda'), sam_predictor)
                 elif model == "biovil":
@@ -163,15 +167,13 @@ def eval_chexlocalize(model, GRADCAM):
         
                 pred_mask = (pred_mask != 0).astype(int)
                 
-                # compute iou
+                # Compute iou
                 try:
                     iou_score = get_iou(pred_mask, gt_mask)
                 except:
                     iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
 
                 iou_results[query].append(iou_score)
-                # except:
-                #     print(f"\nSkipping {filename}, {text_prompt} due to errors\n")
     
     # Compute and print pathology-specific mIoUs
     total_sum = 0
@@ -181,15 +183,15 @@ def eval_chexlocalize(model, GRADCAM):
         total_count += len(value_list)
     mIoU = total_sum / total_count
 
-    # compute mIoU by class and save to json
+    # Compute mIoU by class and save to json
     mIoU_classes = {}
     for class_name in PROMPTS:
         mIoU_classes[class_name] = np.mean(iou_results[class_name])
     mIoU_classes['mIoU'] = mIoU
-    # FNAME = ""
     json.dump(mIoU_classes, open(f'chexlocalize_{model}_gradcam={GRADCAM}.json', 'w'))
     
     return mIoU
+
 
 class UnitTest:
     def __init__(self):
@@ -199,20 +201,21 @@ class UnitTest:
         print("Starting Grounded-SAM, CheXlocalize...")
         print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam"))
         
-        print("Starting Grounded-SAM, PASCAL...")
-        print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam"))
+        # print("Starting Grounded-SAM, PASCAL...")
+        # print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam"))
         
         print("Starting BioViL, CheXlocalize, GRADCAM=False...")
         print("BioViL, CheXlocalize, GRADCAM=False: ", eval_results("chexlocalize", "biovil"))
         
-        print("Starting BioViL, CheXlocalize, GRADCAM=True...")
-        print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))
+        # print("Starting BioViL, CheXlocalize, GRADCAM=True...")
+        # print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))
         
-        print("Starting BioViL, PASCAL, GRADCAM=False...")
-        print("BioViL, PASCAL, GRADCAM=False: ", eval_results("pascal", "biovil"))
+        # print("Starting BioViL, PASCAL, GRADCAM=False...")
+        # print("BioViL, PASCAL, GRADCAM=False: ", eval_results("pascal", "biovil"))
         
-        print("Starting BioViL, PASCAL, GRADCAM=True...")
-        print("BioViL, PASCAL, GRADCAM=True: ", eval_results("pascal", "biovil", GRADCAM=True))
+        # print("Starting BioViL, PASCAL, GRADCAM=True...")
+        # print("BioViL, PASCAL, GRADCAM=True: ", eval_results("pascal", "biovil", GRADCAM=True))
+
 
 if __name__=='__main__':
     unit_test = UnitTest()
