@@ -75,6 +75,13 @@ def run_grounded_sam(image_path, text_prompt, groundingdino_model, sam_predictor
     boxes_xyxy = box_ops.box_cxcywh_to_xyxy(boxes) * torch.Tensor([W, H, W, H])
 
     transformed_boxes = sam_predictor.transform.apply_boxes_torch(boxes_xyxy, image_source.shape[:2]).to(device)
+
+    # No box found -> return a False mask
+    if len(transformed_boxes) == 0:
+        image_mask = np.zeros((H, W))
+        image_mask = image_mask > 0
+        return image_mask
+        
     masks, _, _ = sam_predictor.predict_torch(
                 point_coords = None,
                 point_labels = None,
