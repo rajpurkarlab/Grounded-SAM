@@ -1,29 +1,27 @@
-"""PASCAL dataset class and dataloader.
-    
-This file should also contains a quick test script to verify the dataloader works
-to traverse through all the images in the dataset.
-"""
-
 import os
 import torch
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 from linear_probe import LinearProbe
 import torch
 from torchvision import transforms
 from PIL import Image
+import pickle
 from transformers import SamProcessor
 
 from utils import get_queries, get_bounding_box
 
+
 class PASCALDataset(Dataset):
     """PASCAL VOC dataset."""
 
-    def __init__(self, size=(256,256)):
-        """
-        tensors (boolean): If true, return image as tensor. If false, don't return image (much faster).
-        """
+    def __init__(self):
+        self.processed_data_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/Processed'
+        
+
+    def preprocess(self, size=(256,256)):
         self.train_id_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/train.txt'
         self.class_name_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/class_names.txt'
         self.img_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages'
@@ -45,7 +43,7 @@ class PASCALDataset(Dataset):
         
         self.samples = []
         
-        for idx in range(len(self.train_ids)):
+        for idx in tqdm(range(len(self.train_ids))):
             id = self.train_ids[idx]
             img_path = self.img_folder_path + '/' + id + '.jpg'
 
@@ -70,84 +68,23 @@ class PASCALDataset(Dataset):
                 # add ground truth segmentation
                 inputs["ground_truth_mask"] = ground_truth_mask
                 
-                inputs["image"] = img
+                # inputs["image"] = img
                 inputs["image_path"] = img_path
-                
-                self.samples.append(inputs)
-            
-    def __len__(self):
-        return len(self.samples)
 
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-                
-        return self.samples[idx]
+                # store to disk
+                with open(os.path.join(self.processed_data_path, f'sample_{idx}.pkl'), 'wb') as file:
+                    pickle.dump(inputs, file)
 
-
-# class PASCALDataset(Dataset):
-#     """PASCAL VOC dataset."""
-
-#     def __init__(self, size=(256,256)):
-#         """
-#         tensors (boolean): If true, return image as tensor. If false, don't return image (much faster).
-#         """
-#         self.train_id_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/train.txt'
-#         self.class_name_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/class_names.txt'
-#         self.img_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages'
-#         self.gt_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/SegmentationClass'
-#         self.processor = processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
     
-#         # Load class names
-#         self.class_names = []
-#         for line in open(self.class_name_path, 'r'):
-#             self.class_names.append(line.strip())
-        
-#         # Load val ids
-#         self.train_ids = []
-#         for line in open(self.train_id_path, 'r'):
-#             id = line.strip()
-#             self.train_ids.append(id)
-        
-#         self.size = size
-        
-            
-#     def __len__(self):
-#         return len(self.train_ids)
+    def __len__(self):
+        files = [f for f in os.listdir(self.processed_data_path)]
+        return len(files)
 
-
-#     def __getitem__(self, idx):
-#         if torch.is_tensor(idx):
-#             idx = idx.tolist()
-
-#         id = self.train_ids[idx]
-#         img_path = self.img_folder_path + '/' + id + '.jpg'
-
-#         gt_path = self.gt_folder_path + '/' + id + '.png'
-        
-#         gt_masks = get_queries(gt_path, self.size)
-
-#         img = Image.open(img_path)
-#         img = img.resize(self.size)
-                        
-#         for val in gt_masks:
-#             ground_truth_mask = gt_masks[val]
-            
-#             prompt = get_bounding_box(ground_truth_mask)
-        
-#             # prepare image and prompt for the model
-#             inputs = self.processor(img, input_boxes=[[prompt]], return_tensors="pt")
-
-#             # remove batch dimension which the processor adds by default
-#             inputs = {k:v.squeeze(0) for k,v in inputs.items()}
-
-#             # add ground truth segmentation
-#             inputs["ground_truth_mask"] = ground_truth_mask
-            
-#             inputs["image"] = img
-#             inputs["image_path"] = img_path
-                
-#         return inputs
+    
+    def __getitem__(self, idx):
+        with open(os.path.join(self.processed_data_path, f'sample_{idx}.pkl'), 'rb') as file:
+            data = pickle.load(file)
+        return data
 
 
 def load_data(batch_size=16, num_workers=0):
@@ -163,14 +100,11 @@ class UnitTest:
         pass
 
     def load_data_test(self):
-        print("Loading PASCAL dataset (taking a long time due to preprocessing being done at initialization)...")
         num_samples, dataloader = load_data()
-        print("Finished loading PASCAL dataset.")
 
         print("Number of batches:", len(dataloader))
-        for i, data in enumerate(dataloader):
-            images = data["image"]
-            masks = data["gt_mask"]
+        for i, data in enumerate(tqdm(dataloader)):
+            pass
         print("Passed all tests")
 
 
