@@ -40,7 +40,8 @@ def train(hyperparams):
 
     # Load hyperparameters
     lr = hyperparams['lr']
-    batch_size = hyperparams['batch_size']
+    batch_size_ada = hyperparams['batch_size_adaptation']
+    batch_size_seg = hyperparams['batch_size_segmentation']
     num_epochs = hyperparams['num_epochs']
     num_workers = hyperparams['num_workers']
     save_every = hyperparams['save_every']
@@ -58,16 +59,17 @@ def train(hyperparams):
                     "use_sam": use_sam,
                     "epochs": num_epochs,
                     "learning_rate": lr,
-                    "batch_size": batch_size,
+                    "batch_size_adaptation": batch_size_ada,
+                    "batch_size_segmentation": batch_size_seg,
                 }
             )
 
     # Load data
-    num_mimic_samples, mimic_dataloader = load_mimic(batch_size=batch_size, tensor=False, num_workers=num_workers)
-    # print(num_mimic_batches / batch_size)
-    # print(get_len())
-    # print(int(get_len()/(num_mimic_batches / batch_size)))
-    # pascal_dataloader = load_pascal(batch_size=int(get_len()/(num_mimic_batches / batch_size)), num_workers=num_workers)
+    num_mimic_samples, mimic_dataloader = load_mimic(batch_size=batch_size_ada, tensor=False, num_workers=num_workers)
+    num_pascal_samples, pascal_dataloader = load_pascal(batch_size=batch_size_seg, num_workers=num_workers)
+    # print(num_mimic_samples / batch_size)
+    # print(int(get_len()/(num_mimic_samples / batch_size)))
+    # pascal_dataloader = load_pascal(batch_size=int(get_len()/(num_mimic_samples / batch_size)), num_workers=num_workers)
 
     # Load model
     my_groundingdino = myGroundingDino(
@@ -98,7 +100,7 @@ def train(hyperparams):
     # Training loop
     for epoch in range(num_epochs):
         
-        # it = iter(pascal_dataloader)
+        it = iter(pascal_dataloader)
         for i, data in enumerate(tqdm(mimic_dataloader, desc=f'Training @ epoch {epoch+1} of {num_epochs}')):
             optimizer.zero_grad()
 
@@ -110,8 +112,8 @@ def train(hyperparams):
             loss_adaptation, groundingdino_img_similarity, groundingdino_txt_similarity, sam_img_similarity = compute_adaptation_loss(
                 image_paths, reports, my_groundingdino, my_biomedclip, my_sam
             )
-            # loss_segmentation = compute_segmentation_loss(next(it), my_sam)
             loss_segmentation = torch.tensor(0.0)
+            loss_segmentation = compute_segmentation_loss(next(it), my_sam)
             loss = loss_adaptation + loss_segmentation
 
             # Log to wandb
@@ -196,7 +198,7 @@ def compute_segmentation_loss(batch, sam_class):
     sam.train()
     loss = 0
     
-    for i in range(len(batch)):
+    for i in range(len(batch["pixel_values"])):
         inputs = {}
         inputs["image"]=batch["pixel_values"][i].to(device)
         inputs["boxes"] = batch["input_boxes"][i].to(device)
@@ -231,8 +233,7 @@ class UnitTest:
         print(loss)
     
     def test_seg_loss(self):
-        from dataset_pascal import load_data
-        dataloader = load_data()
+        num_pascal_samples, dataloader = load_pascal(batch_size=2)
         sam = mySAM()
         
         for i, data in enumerate(dataloader):
@@ -242,14 +243,15 @@ class UnitTest:
     def run_training(self):
         hyperparams = {
             "lr": 1e-4,
-            "batch_size": 1,
+            "batch_size_adaptation": 1,
+            "batch_size_segmentation": 2,
             "num_epochs": 1,
             "num_workers": 4,
             "use_sam": True,
             "save_every": 1000,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
-            "log_to_wandb": True
+            "log_to_wandb": False
         }
         train(hyperparams)
         
