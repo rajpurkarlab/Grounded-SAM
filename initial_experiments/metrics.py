@@ -34,7 +34,7 @@ def cedar(pred_mask, gt_mask, class_type="foreground"):
     return dice(pred_mask, gt_mask) - ((cm.fn + cm.fp) / area)
 
 
-def fig(pred_mask, gt_mask, metric):
+def balanced_metric(pred_mask, gt_mask, metric):
     if metric == "iou":
         fg = iou(pred_mask, gt_mask, class_type="foreground")
         bg = iou(pred_mask, gt_mask, class_type="background")
