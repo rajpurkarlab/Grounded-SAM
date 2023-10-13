@@ -68,8 +68,9 @@ class PASCALDataset(Dataset):
                 # add ground truth segmentation
                 inputs["ground_truth_mask"] = ground_truth_mask
                 
-                # inputs["image"] = img
+                inputs["image"] = transforms.ToTensor()(img)
                 inputs["image_path"] = img_path
+                inputs["category"] = val
 
                 # store to disk
                 with open(os.path.join(self.processed_data_path, f'sample_{idx}.pkl'), 'wb') as file:
@@ -100,14 +101,20 @@ class UnitTest:
         pass
 
     def load_data_test(self):
-        num_samples, dataloader = load_data()
+        num_samples, dataloader = load_data(batch_size=4)
 
         print("Number of batches:", len(dataloader))
         for i, data in enumerate(tqdm(dataloader)):
-            pass
+            print(type(data))
         print("Passed all tests")
+    
+    def preprocess_test(self):
+        dataset = PASCALDataset()
+        dataset.preprocess()
+        print("Passed preprocess")
 
 
 if __name__=='__main__':
     unit_test = UnitTest()
-    unit_test.load_data_test()
+    unit_test.preprocess_test()
+    # unit_test.load_data_test()
