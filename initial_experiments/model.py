@@ -9,9 +9,11 @@ import torch
 import torchvision
 from PIL import Image
 import cv2
+from functools import partial
 import open_clip
 from segment_anything.utils.transforms import ResizeLongestSide
 from segment_anything import sam_model_registry, build_sam, SamPredictor
+from segment_anything.modeling import ImageEncoderViT, MaskDecoder, PromptEncoder, Sam, TwoWayTransformer
 
 from models.grounded_sam import *
 from groundingdino.util.misc import nested_tensor_from_tensor_list
@@ -101,7 +103,7 @@ class myGroundingDino:
     def get_txt_emb(self, text):
         """Get text embedding for Grounding Dino."""
         # Tokenize
-        tokenized = self.model.tokenizer(text, padding="max_length", max_length=256, return_tensors="pt")
+        tokenized = self.model.tokenizer(text, padding="max_length", truncation=True, max_length=256, return_tensors="pt")
         for key, value in tokenized.items():
             tokenized[key] = value.to(self.device)
 
@@ -210,6 +212,85 @@ class myBiomedCLIP:
         torch.save(self.model.state_dict(), ckpt_folder + ckpt_file)
 
 
+# class mySAM:
+
+#     def __init__(
+#         self,
+#         model_name="vit_l",
+#         ckpt_file="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
+#         img_linear_ckpt=None,
+#         device="cuda",
+#     ):
+#         # Load Grounded SAM
+#         self.model = sam_model_registry[model_name](checkpoint=ckpt_file)
+#         print(self.model.image_encoder.img_size)
+#         raise NameError()
+#         self.model.to(device)
+#         self.device = device
+
+#         # Load linear probe for SAM image embedding
+#         sam_input_dims = [
+#             [1, 256, 64, 64]
+#         ]
+#         self.img_linear = LinearProbe(
+#             sam_input_dims, 
+#             512,
+#             device,
+#         )
+#         if img_linear_ckpt:
+#             self.img_linear.load_state_dict(torch.load(img_linear_ckpt, map_location=device))
+
+
+#     def preprocess_img(self, image_paths):
+#         """Preprocess image for SAM.
+        
+#         Inputs:
+#             - image_paths: list of image paths
+#         """
+        
+#         images = []
+#         for image_path in image_paths:
+#             input_image = Image.open(image_path) 
+#             images.append(input_image)
+
+#         transform = torchvision.transforms.Compose([
+#             torchvision.transforms.Resize((20, 20)),
+#             torchvision.transforms.ToTensor()
+#         ])
+#         input_image_torch = [transform(img).to(self.device) for img in images]
+#         input_image_torch = torch.stack(input_image_torch)
+
+#         x = input_image_torch
+#         pixel_mean = [123.675, 116.28, 103.53]
+#         pixel_std = [58.395, 57.12, 57.375]
+#         x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(self.device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(self.device)
+#         return x
+
+    
+#     def get_img_emb(self, image_path):
+#         """Get image embedding for SAM"""
+#         sam_img = self.preprocess_img(image_path)
+#         sam_img_embedding = self.model.image_encoder(sam_img)
+#         return sam_img_embedding
+
+
+#     def align_img_emb(self, sam_img_embedding):
+#         """Align image embedding to 512."""
+#         sam_img_embedding = self.img_linear([sam_img_embedding])
+#         return sam_img_embedding
+
+
+#     def save_model(
+#         self, 
+#         ckpt_folder="./initial_experiments/ckpts/", 
+#         backbone_file="sam.pth",
+#         img_linear_ckpt="sam_img_linear.pth"
+#     ):
+#         """Save SAM backbone and linear probe for image embedding."""
+#         torch.save(self.model.state_dict(), ckpt_folder + backbone_file)
+#         torch.save(self.img_linear.state_dict(), ckpt_folder + img_linear_ckpt)
+
+
 class mySAM:
 
     def __init__(
@@ -220,7 +301,11 @@ class mySAM:
         device="cuda",
     ):
         # Load Grounded SAM
-        self.model = sam_model_registry[model_name](checkpoint=ckpt_file)
+        # self.model = sam_model_registry[model_name](checkpoint=ckpt_file)
+        self.model = self._build_sam(
+            checkpoint=ckpt_file,
+            image_size=1024
+        )
         self.model.to(device)
         self.device = device
 
@@ -236,6 +321,61 @@ class mySAM:
         if img_linear_ckpt:
             self.img_linear.load_state_dict(torch.load(img_linear_ckpt, map_location=device))
 
+    def _build_sam(
+        self,
+        encoder_embed_dim=1024,
+        encoder_depth=24,
+        encoder_num_heads=16,
+        encoder_global_attn_indexes=[5, 11, 17, 23],
+        checkpoint=None,
+        image_size = 1024,
+    ):
+        prompt_embed_dim = 256
+        vit_patch_size = 16
+        image_embedding_size = image_size // vit_patch_size
+        sam = Sam(
+            image_encoder=ImageEncoderViT(
+                depth=encoder_depth,
+                embed_dim=encoder_embed_dim,
+                img_size=image_size,
+                mlp_ratio=4,
+                norm_layer=partial(torch.nn.LayerNorm, eps=1e-6),
+                num_heads=encoder_num_heads,
+                patch_size=vit_patch_size,
+                qkv_bias=True,
+                use_rel_pos=True,
+                global_attn_indexes=encoder_global_attn_indexes,
+                window_size=14,
+                out_chans=prompt_embed_dim,
+            ),
+            prompt_encoder=PromptEncoder(
+                embed_dim=prompt_embed_dim,
+                image_embedding_size=(image_embedding_size, image_embedding_size),
+                input_image_size=(image_size, image_size),
+                mask_in_chans=16,
+            ),
+            mask_decoder=MaskDecoder(
+                num_multimask_outputs=3,
+                transformer=TwoWayTransformer(
+                    depth=2,
+                    embedding_dim=prompt_embed_dim,
+                    mlp_dim=2048,
+                    num_heads=8,
+                ),
+                transformer_dim=prompt_embed_dim,
+                iou_head_depth=3,
+                iou_head_hidden_dim=256,
+            ),
+            pixel_mean=[123.675, 116.28, 103.53],
+            pixel_std=[58.395, 57.12, 57.375],
+        )
+        sam.eval()
+        if checkpoint is not None:
+            with open(checkpoint, "rb") as f:
+                state_dict = torch.load(f)
+            sam.load_state_dict(state_dict)
+        return sam
+
 
     def preprocess_img(self, image_paths):
         """Preprocess image for SAM.
@@ -243,30 +383,26 @@ class mySAM:
         Inputs:
             - image_paths: list of image paths
         """
-        
         images = []
+        transform = ResizeLongestSide(self.model.image_encoder.img_size)
+
         for image_path in image_paths:
-            input_image = Image.open(image_path) 
-            images.append(input_image)
-
-        transform = torchvision.transforms.Compose([
-            torchvision.transforms.Resize((20, 20)),
-            torchvision.transforms.ToTensor()
-        ])
-        input_image_torch = [transform(img).to(self.device) for img in images]
-        input_image_torch = torch.stack(input_image_torch)
-
-        x = input_image_torch
-        pixel_mean = [123.675, 116.28, 103.53]
-        pixel_std = [58.395, 57.12, 57.375]
-        x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(self.device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(self.device)
-        return x
+            image = Image.open(image_path) 
+            image = transform.apply_image(np.array(image))
+            image = torch.as_tensor(image, device=self.device)
+            image = image.permute(2, 0, 1).contiguous()[None, :, :, :]
+            image = self.model.preprocess(image)
+            images.append(image)
+        
+        images = torch.cat(images, dim=0)
+        return images
 
     
     def get_img_emb(self, image_path):
         """Get image embedding for SAM"""
         sam_img = self.preprocess_img(image_path)
-        sam_img_embedding = self.model.image_encoder(sam_img)
+        print(sam_img.shape)
+        sam_img_embedding, interm_features = self.model.image_encoder(sam_img)
         return sam_img_embedding
 
 
@@ -285,6 +421,7 @@ class mySAM:
         """Save SAM backbone and linear probe for image embedding."""
         torch.save(self.model.state_dict(), ckpt_folder + backbone_file)
         torch.save(self.img_linear.state_dict(), ckpt_folder + img_linear_ckpt)
+
 
 
 class UnitTest:
@@ -388,11 +525,11 @@ class UnitTest:
 if __name__ == "__main__":
     unit_test = UnitTest()
 
-    unit_test.test_grounding_dino()
-    # unit_test.test_grounding_dino_save()
+    # unit_test.test_grounding_dino()
+    # # unit_test.test_grounding_dino_save()
 
-    unit_test.test_biomed_clip()
-    # unit_test.test_biomed_clip_save()
+    # unit_test.test_biomed_clip()
+    # # unit_test.test_biomed_clip_save()
 
     unit_test.test_sam()
     # unit_test.test_sam_save()

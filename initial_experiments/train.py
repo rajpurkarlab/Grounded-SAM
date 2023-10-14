@@ -5,6 +5,8 @@ Iteratively train between adaptation and segmentation objectives:
     - Segmentation: train Grounded SAM with its original objective using natural dataset.
 """
 import os
+import pdb
+
 import torch
 import pandas as pd
 import numpy as np
@@ -17,6 +19,7 @@ from torchvision import transforms
 from torchmetrics.classification import Dice
 from PIL import Image
 from transformers import SamProcessor
+from info_nce import InfoNCE
 
 from model import myGroundingDino, myBiomedCLIP, mySAM
 from dataset_mimic import load_data as load_mimic
@@ -77,25 +80,30 @@ def train(hyperparams):
         ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
         device=device,
     )
-    my_sam = mySAM(
-        ckpt_file="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
-        device=device,
-    )
-    my_biomedclip = myBiomedCLIP(device=device)
-
-    # Load optimizer
-    groundingdino_params = list(my_groundingdino.model.backbone.parameters()) + list(my_groundingdino.img_linear.parameters()) + list(my_groundingdino.txt_linear.parameters())
-    sam_params = list(my_sam.model.parameters()) + list(my_sam.img_linear.parameters())
-    optimizer = torch.optim.Adam(groundingdino_params + sam_params, lr=lr)
-
-    # Set up training mode
     my_groundingdino.model.backbone.train()
     my_groundingdino.img_linear.train()
     my_groundingdino.txt_linear.train()
-    my_sam.model.train()
-    my_sam.img_linear.train()
+
+    my_biomedclip = myBiomedCLIP(device=device)
     my_biomedclip.model.eval()
+    
+    my_sam = None
+    if use_sam:
+        my_sam = mySAM(
+            ckpt_file="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
+            device=device,
+        )
+        my_sam.model.train()
+        my_sam.img_linear.train()
     print("\nLoaded models!\n")
+    
+    # Load optimizer
+    groundingdino_params = list(my_groundingdino.model.backbone.parameters()) + list(my_groundingdino.img_linear.parameters()) + list(my_groundingdino.txt_linear.parameters())
+    if use_sam:
+        sam_params = list(my_sam.model.parameters()) + list(my_sam.img_linear.parameters())
+        optimizer = torch.optim.Adam(groundingdino_params + sam_params, lr=lr)
+    else:
+        optimizer = torch.optim.Adam(groundingdino_params, lr=lr)    
     
     # Training loop
     for epoch in range(num_epochs):
@@ -109,11 +117,11 @@ def train(hyperparams):
             reports = data["report"]
 
             # Compte loss
-            loss_adaptation, groundingdino_img_similarity, groundingdino_txt_similarity, sam_img_similarity = compute_adaptation_loss(
+            loss_adaptation, groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss = compute_adaptation_loss(
                 image_paths, reports, my_groundingdino, my_biomedclip, my_sam
             )
             loss_segmentation = torch.tensor(0.0)
-            loss_segmentation = compute_segmentation_loss(next(it), my_sam)
+            # loss_segmentation = compute_segmentation_loss(next(it), my_sam) # TODO: add back when segmentation loss is ready
             loss = loss_adaptation + loss_segmentation
 
             # Log to wandb
@@ -122,9 +130,10 @@ def train(hyperparams):
                         "loss": loss,
                         "loss_adaptation": loss_adaptation,
                         "loss_segmentation": loss_segmentation,
-                        "groundingdino_img_similarity": groundingdino_img_similarity,
-                        "groundingdino_txt_similarity": groundingdino_txt_similarity,
-                        "sam_img_similarity": sam_img_similarity,
+                        "groundingdino_img_loss": groundingdino_img_loss,
+                        "groundingdino_txt_loss": groundingdino_txt_loss,
+                        "groundingdino_img_txt_loss": groundingdino_img_txt_loss,
+                        "sam_img_loss": sam_img_loss,
                     })
             
             # Training step
@@ -160,7 +169,10 @@ def train(hyperparams):
 
 
 def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedclip, my_sam):
-    """Compute adaptation loss between grounding dino and biomedclip + between sam and biomedclip."""
+    """Compute adaptation loss between grounding dino and biomedclip + between sam and biomedclip.
+    
+    Loss function: cosine similarity between embeddings if SAM is activated, InfoNCE loss if SAM is not activated.
+    """
     # Get embeddings
     groundingdino_img_emb = my_groundingdino.get_img_emb(image_paths)
     groundingdino_img_emb = my_groundingdino.align_img_emb(groundingdino_img_emb)
@@ -175,17 +187,34 @@ def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedcli
         sam_img_embedding = my_sam.get_img_emb(image_paths)
         sam_img_embedding = my_sam.align_img_emb(sam_img_embedding)
 
-    # Get loss - cosine similarity (consider using InfoNCE loss if we can have larger batch sizes)
-    groundingdino_img_similarity = F.cosine_similarity(groundingdino_img_emb, bmc_img_embedding).mean()
-    groundingdino_txt_similarity = F.cosine_similarity(groundingdino_txt_emb, bmc_txt_embedding).mean()
-    sam_img_similarity = torch.tensor(0.0)
+    # Define loss function
     if my_sam:
-        sam_img_similarity = F.cosine_similarity(sam_img_embedding, bmc_img_embedding).mean()
-    loss = -(groundingdino_img_similarity + groundingdino_txt_similarity + sam_img_similarity)
-    return (loss, groundingdino_img_similarity, groundingdino_txt_similarity, sam_img_similarity)
+        loss_fn = F.cosine_similarity
+    else:
+        loss_fn = InfoNCE()
+
+    # Get loss
+    groundingdino_img_loss = loss_fn(groundingdino_img_emb, bmc_img_embedding).mean()
+    groundingdino_txt_loss = loss_fn(groundingdino_txt_emb, bmc_txt_embedding).mean()
+    groundingdino_img_txt_loss = loss_fn(groundingdino_img_emb, groundingdino_txt_emb).mean()
+
+    sam_img_loss = torch.tensor(0.0)
+    if my_sam:
+        sam_img_loss = -loss_fn(sam_img_embedding, bmc_img_embedding).mean()
+    loss = groundingdino_img_loss + groundingdino_txt_loss + sam_img_loss + groundingdino_img_txt_loss
+
+    # Flip sign of loss if using cosine similarity
+    if my_sam:
+        loss = -loss
+        groundingdino_img_loss = -groundingdino_img_loss
+        groundingdino_txt_loss = -groundingdino_txt_loss
+        groundingdino_img_txt_loss = -groundingdino_img_txt_loss
+        sam_img_loss = -sam_img_loss
+    return (loss, groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss)
 
     
-def compute_segmentation_loss(batch, sam_class):
+def compute_segmentation_loss(batch, sam_class, my_sam=None):
+    """Compute segmentation loss if sam is activated, otherwise, compute loss based on bbox."""
     sam = sam_class.model
     
     for name, param in sam.named_parameters():
@@ -243,12 +272,12 @@ class UnitTest:
     def run_training(self):
         hyperparams = {
             "lr": 1e-4,
-            "batch_size_adaptation": 1,
+            "batch_size_adaptation": 64,
             "batch_size_segmentation": 2,
             "num_epochs": 1,
             "num_workers": 4,
-            "use_sam": True,
-            "save_every": 1000,
+            "use_sam": False,
+            "save_every": 100,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
             "log_to_wandb": False
