@@ -5,8 +5,10 @@ warnings.simplefilter("ignore")
 import sys
 sys.path.extend(["../", "./"])
 
+import pdb
 import torch
 import torchvision
+from torchvision.ops import box_convert
 from PIL import Image
 import cv2
 from functools import partial
@@ -18,7 +20,7 @@ from segment_anything.modeling import ImageEncoderViT, MaskDecoder, PromptEncode
 from models.grounded_sam import *
 from groundingdino.util.misc import nested_tensor_from_tensor_list
 from models.GroundingDINO.groundingdino.models.GroundingDINO.bertwarper import generate_masks_with_special_tokens_and_transfer_map_nocate
-from models.GroundingDINO.groundingdino.util.inference import load_model
+from models.GroundingDINO.groundingdino.util.inference import load_model, preprocess_caption
 
 from linear_probe import LinearProbe
 
@@ -158,6 +160,33 @@ class myGroundingDino:
         groundingdino_txt_embedding = self.txt_linear([groundingdino_txt_embedding])
         return groundingdino_txt_embedding
     
+    def predict(self, image_path: str, caption: str, box_threshold: float):  
+        # Prepare images
+        image = self.preprocess_img(image_path)
+        caption = [preprocess_caption(c) for c in caption]
+
+        # Get prediction
+        outputs = self.model(image, captions=caption)
+        prediction_logits = outputs["pred_logits"].cpu().sigmoid()[0]  # prediction_logits.shape = (nq, 256)
+        prediction_boxes = outputs["pred_boxes"].cpu()[0]  # prediction_boxes.shape = (nq, 4)
+
+        # Filter results with confidence threshold
+        mask = prediction_logits.max(dim=1)[0] > box_threshold
+        logits = prediction_logits[mask]  # logits.shape = (n, 256)
+        boxes = prediction_boxes[mask]  # boxes.shape = (n, 4)
+
+        # Filter for the highest confidence box
+        mask = logits.max(dim=1)[0] == logits.max(dim=1)[0].max()
+        logits = logits[mask]  # logits.shape = (1, 256)
+        boxes = boxes[mask]  # boxes.shape = (1, 4)
+
+        # Resize boxes from [0, 1] to original dimension of the image
+        _, _, h, w = image.shape["tensors.shape"]
+        boxes = boxes * torch.Tensor([w, h, w, h])
+        boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").detach().numpy()
+
+        return boxes, logits.max(dim=1)[0]
+
 
     def save_model(
             self, 
@@ -475,7 +504,24 @@ class UnitTest:
         groundingdino_txt_embedding = grounding_dino.align_txt_emb(groundingdino_txt_embedding)
         print("After alignment, text embedding shape:", groundingdino_txt_embedding.shape)
         print("Test grounding dino: SUCCESS!")
+
     
+    def test_grounding_dino_predict(self):
+        # Load model
+        grounding_dino = myGroundingDino()
+        IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg"]
+        TEXT_PROMPT = ["2 dogs sitting in their kennels"]
+        BOX_TRESHOLD = 0.35
+
+        # Get predicted bbox
+        boxes, logits = grounding_dino.predict(
+            image_path=IMAGE_PATH,
+            caption=TEXT_PROMPT,
+            box_threshold=BOX_TRESHOLD,
+        )
+        print(boxes, logits)
+        print("Test grounding dino predict: SUCCESS!")
+
 
     def test_grounding_dino_save(self):
         # Load model
@@ -539,7 +585,8 @@ class UnitTest:
 if __name__ == "__main__":
     unit_test = UnitTest()
 
-    unit_test.test_grounding_dino()
+    # unit_test.test_grounding_dino()
+    unit_test.test_grounding_dino_predict()
     # # unit_test.test_grounding_dino_save()
 
     # unit_test.test_biomed_clip()
