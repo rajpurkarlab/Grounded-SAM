@@ -93,20 +93,21 @@ class myGroundingDino:
         Inputs:
             - image_paths: list of image paths
         """
-        images = []
+        source_images, images = [], []
         for image_path in image_paths:
-            _, image = self.load_image(image_path)
+            source_image, image = self.load_image(image_path)
+            source_images.append(source_image)
             images.append(image)
 
         # Convert tensor to nested tensor
         images = nested_tensor_from_tensor_list(images).to(self.device)
-        return images.to(self.device)
+        return source_images, images.to(self.device)
     
 
     def get_img_emb(self, image_path):
         """Get image embedding for Grounding Dino."""
         # Preprocess
-        img = self.preprocess_img(image_path)
+        _, img = self.preprocess_img(image_path)
         
         # Run backbone
         backbone_output, _ = self.model.backbone(img)
@@ -162,7 +163,7 @@ class myGroundingDino:
     
     def predict(self, image_path: str, caption: str, box_threshold: float):  
         # Prepare images
-        image = self.preprocess_img(image_path)
+        source_image, image = self.preprocess_img(image_path)
         caption = [preprocess_caption(c) for c in caption]
 
         # Get prediction
@@ -181,7 +182,7 @@ class myGroundingDino:
         boxes = boxes[mask]  # boxes.shape = (1, 4)
 
         # Resize boxes from [0, 1] to original dimension of the image
-        _, _, h, w = image.shape["tensors.shape"]
+        h, w, _ = source_image[0].shape
         boxes = boxes * torch.Tensor([w, h, w, h])
         boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").detach().numpy()
 
@@ -585,7 +586,7 @@ class UnitTest:
 if __name__ == "__main__":
     unit_test = UnitTest()
 
-    # unit_test.test_grounding_dino()
+    unit_test.test_grounding_dino()
     unit_test.test_grounding_dino_predict()
     # # unit_test.test_grounding_dino_save()
 

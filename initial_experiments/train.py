@@ -144,15 +144,15 @@ def train(hyperparams):
             if i % (save_every+1) == 0:
                 my_groundingdino.save_model(
                     ckpt_folder=save_folder,
-                    backbone_ckpt=f"initial_experiments_groundingdino_backbone_{save_every}.pth",
-                    img_linear_ckpt=f"initial_experiments_groundingdino_img_linear_{save_every}.pth",
-                    txt_linear_ckpt=f"initial_experiments_groundingdino_txt_linear_{save_every}.pth",
+                    backbone_ckpt=f"initial_experiments_groundingdino_backbone_{i}.pth",
+                    img_linear_ckpt=f"initial_experiments_groundingdino_img_linear_{i}.pth",
+                    txt_linear_ckpt=f"initial_experiments_groundingdino_txt_linear_{i}.pth",
                 )
                 if use_sam:
                     my_sam.save_model(
                         ckpt_folder=save_folder,
-                        backbone_file=f"initial_experiments_sam_{save_every}.pth",
-                        img_linear_ckpt=f"initial_experiments_sam_img_linear_{save_every}.pth",
+                        backbone_file=f"initial_experiments_sam_{i}.pth",
+                        img_linear_ckpt=f"initial_experiments_sam_img_linear_{i}.pth",
                     )
 
 
@@ -272,7 +272,7 @@ class UnitTest:
     def run_training(self):
         hyperparams = {
             "lr": 1e-4,
-            "batch_size_adaptation": 64,
+            "batch_size_adaptation": 32,
             "batch_size_segmentation": 2,
             "num_epochs": 1,
             "num_workers": 4,
