@@ -18,7 +18,7 @@ from segment_anything.modeling import ImageEncoderViT, MaskDecoder, PromptEncode
 from models.grounded_sam import *
 from groundingdino.util.misc import nested_tensor_from_tensor_list
 from models.GroundingDINO.groundingdino.models.GroundingDINO.bertwarper import generate_masks_with_special_tokens_and_transfer_map_nocate
-from models.GroundingDINO.groundingdino.util.inference import load_image, load_model
+from models.GroundingDINO.groundingdino.util.inference import load_model
 
 from linear_probe import LinearProbe
 
@@ -42,9 +42,9 @@ class myGroundingDino:
         
         # Load linear probe for Grounding Dino image embedding
         groundingdino_input_dims = [
-            [1, 256, 28, 28],
-            [1, 512, 14, 14],
-            [1, 1024, 7, 7],
+            [1, 256, 100, 100],
+            [1, 512, 50, 50],
+            [1, 1024, 25, 25],
         ]
         self.img_linear = LinearProbe(
             groundingdino_input_dims,
@@ -67,20 +67,34 @@ class myGroundingDino:
             self.txt_linear.load_state_dict(torch.load(txt_linear_ckpt, map_location=device))
 
 
+    def load_image(self, image_path: str):
+        """Load image for Grounding Dino.
+        
+        Helper function for preprocess_img, lightly adopted from Grounding Dino codebase and removed the center crop.
+        """
+        transform = torchvision.transforms.Compose([
+                # T.RandomResize([800], max_size=1333),
+                # S.CenterCrop(800),
+                torchvision.transforms.ToTensor(),
+                torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                torchvision.transforms.Resize((800, 800)),
+        ])
+        image_source = Image.open(image_path).convert("RGB")
+        image = np.asarray(image_source)
+        image_transformed = transform(image_source)
+        return image, image_transformed
+
+
     def preprocess_img(self, image_paths):
         """Preprocess image for Grounding Dino.
         
         Inputs:
             - image_paths: list of image paths
         """
-        transform = torchvision.transforms.Compose([
-            torchvision.transforms.Resize((224, 224)),
-        ])
-
         images = []
         for image_path in image_paths:
-            _, image = load_image(image_path)
-            images.append(transform(image))
+            _, image = self.load_image(image_path)
+            images.append(image)
 
         # Convert tensor to nested tensor
         images = nested_tensor_from_tensor_list(images).to(self.device)
@@ -525,11 +539,11 @@ class UnitTest:
 if __name__ == "__main__":
     unit_test = UnitTest()
 
-    # unit_test.test_grounding_dino()
+    unit_test.test_grounding_dino()
     # # unit_test.test_grounding_dino_save()
 
     # unit_test.test_biomed_clip()
     # # unit_test.test_biomed_clip_save()
 
-    unit_test.test_sam()
+    # unit_test.test_sam()
     # unit_test.test_sam_save()
