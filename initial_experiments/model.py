@@ -161,30 +161,38 @@ class myGroundingDino:
         groundingdino_txt_embedding = self.txt_linear([groundingdino_txt_embedding])
         return groundingdino_txt_embedding
     
+
     def predict(self, image_path: str, caption: str, box_threshold: float):  
+        """Get predicted bounding box and confidence score for Grounding Dino.
+
+        box_threshold is currently not used, as the box with the highest threshold is always selected.
+        """
+        B = len(image_path)
+
         # Prepare images
         source_image, image = self.preprocess_img(image_path)
         caption = [preprocess_caption(c) for c in caption]
 
         # Get prediction
         outputs = self.model(image, captions=caption)
-        prediction_logits = outputs["pred_logits"].cpu().sigmoid()[0]  # prediction_logits.shape = (nq, 256)
-        prediction_boxes = outputs["pred_boxes"].cpu()[0]  # prediction_boxes.shape = (nq, 4)
+        prediction_logits = outputs["pred_logits"].cpu().sigmoid()  # prediction_logits.shape = (B, nq, 256)
+        prediction_boxes = outputs["pred_boxes"].cpu()  # prediction_boxes.shape = (B, nq, 4)
 
-        # Filter results with confidence threshold
-        mask = prediction_logits.max(dim=1)[0] > box_threshold
-        logits = prediction_logits[mask]  # logits.shape = (n, 256)
-        boxes = prediction_boxes[mask]  # boxes.shape = (n, 4)
+        # # Filter results with confidence threshold
+        # mask = prediction_logits.max(dim=2)[0] > box_threshold # mask.shape = (B, nq)
+        # logits = prediction_logits[mask].view(B, -1, 256)  # logits.shape = (B, n, 256)
+        # boxes = prediction_boxes[mask].view(B, -1, 4)  # boxes.shape = (B, n, 4)
 
         # Filter for the highest confidence box
-        mask = logits.max(dim=1)[0] == logits.max(dim=1)[0].max()
-        logits = logits[mask]  # logits.shape = (1, 256)
-        boxes = boxes[mask]  # boxes.shape = (1, 4)
+        mask = prediction_logits.max(dim=2)[0] == prediction_logits.max(dim=2)[0].max(dim=1)[0].unsqueeze(1) # mask.shape = (B, n)
+        logits = prediction_logits[mask]  # logits.shape = (B, 256)
+        boxes = prediction_boxes[mask]  # boxes.shape = (B, 4)
 
         # Resize boxes from [0, 1] to original dimension of the image
-        h, w, _ = source_image[0].shape
-        boxes = boxes * torch.Tensor([w, h, w, h])
-        boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").detach().numpy()
+        for i in range(B):
+            h, w, _ = source_image[i].shape
+            boxes[i] = boxes[i] * torch.Tensor([w, h, w, h])
+        boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy")
 
         return boxes, logits.max(dim=1)[0]
 
@@ -510,8 +518,8 @@ class UnitTest:
     def test_grounding_dino_predict(self):
         # Load model
         grounding_dino = myGroundingDino()
-        IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg"]
-        TEXT_PROMPT = ["2 dogs sitting in their kennels"]
+        IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg", "./initial_experiments/toy_data/chest_x_ray.jpeg"]
+        TEXT_PROMPT = ["2 dogs sitting in their kennels", "This is a image a 2 lungs."]
         BOX_TRESHOLD = 0.35
 
         # Get predicted bbox
