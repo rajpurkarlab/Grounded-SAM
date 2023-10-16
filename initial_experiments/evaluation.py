@@ -182,7 +182,7 @@ def eval_chexlocalize(model, GRADCAM, use_sam=False):
                         pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
                     else:
                         bbox, logits = groundingdino.predict([filename], [text_prompt], box_threshold=0.0)
-                        bbox = bbox[0].astype(int)
+                        bbox = bbox[0].detach().numpy().astype(int)
                         pred_mask = np.zeros_like(gt_mask)
                         pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1
                 elif model == "biovil":

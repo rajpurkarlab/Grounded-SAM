@@ -44,9 +44,9 @@ class myGroundingDino:
         
         # Load linear probe for Grounding Dino image embedding
         groundingdino_input_dims = [
-            [1, 256, 100, 100],
-            [1, 512, 50, 50],
-            [1, 1024, 25, 25],
+            [1, 256, 32, 32],
+            [1, 512, 16, 16],
+            [1, 1024, 8, 8],
         ]
         self.img_linear = LinearProbe(
             groundingdino_input_dims,
@@ -79,7 +79,7 @@ class myGroundingDino:
                 # S.CenterCrop(800),
                 torchvision.transforms.ToTensor(),
                 torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-                torchvision.transforms.Resize((800, 800)),
+                torchvision.transforms.Resize((256, 256)),
         ])
         image_source = Image.open(image_path).convert("RGB")
         image = np.asarray(image_source)
@@ -596,7 +596,7 @@ if __name__ == "__main__":
 
     unit_test.test_grounding_dino()
     unit_test.test_grounding_dino_predict()
-    # # unit_test.test_grounding_dino_save()
+    # unit_test.test_grounding_dino_save()
 
     # unit_test.test_biomed_clip()
     # # unit_test.test_biomed_clip_save()
