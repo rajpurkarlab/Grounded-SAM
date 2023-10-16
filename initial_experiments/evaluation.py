@@ -11,6 +11,7 @@ import warnings
 warnings.simplefilter("ignore")
 import sys
 sys.path.extend(["../", "./"])
+import pdb
 
 import json
 from uuid import uuid4
@@ -27,9 +28,9 @@ from segment_anything import build_sam_vit_h, build_sam_vit_l, SamPredictor
 
 from model import myGroundingDino, myBiomedCLIP, mySAM
 
-def eval_results(dataset, model, GRADCAM=False):
+def eval_results(dataset, model, GRADCAM=False, use_sam=False):
     if dataset == "chexlocalize":
-        mIoU = eval_chexlocalize(model, GRADCAM)
+        mIoU = eval_chexlocalize(model, GRADCAM, use_sam=use_sam)
     elif dataset == "pascal":
         mIoU = eval_pascal(model, GRADCAM)
     else:
@@ -133,22 +134,23 @@ def eval_pascal(model, GRADCAM):
     
     return mIoU
 
-def eval_chexlocalize(model, GRADCAM):
+def eval_chexlocalize(model, GRADCAM, use_sam=False):
     # Load model
     if model == "grounded-sam":
         env_setup()
         groundingdino = myGroundingDino(
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             # ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
-            ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_1000.pth",
+            ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_100.pth",
         )
         groundingdino_model = groundingdino.model
 
-        sam = build_sam_vit_l(
-            # checkpoint="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
-            checkpoint="./initial_experiments/ckpts/initial_experiments_sam_1000.pth",
-        ).to("cuda")
-        sam_predictor = SamPredictor(sam)
+        if use_sam:
+            sam = build_sam_vit_l(
+                checkpoint="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
+                # checkpoint="./initial_experiments/ckpts/initial_experiments_sam_1000.pth",
+            ).to("cuda")
+            sam_predictor = SamPredictor(sam)
     elif model == "biovil":
         pass
     else:
@@ -176,7 +178,13 @@ def eval_chexlocalize(model, GRADCAM):
                 # Get predicted mask
                 text_prompt = PROMPTS[query]
                 if model == "grounded-sam":
-                    pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
+                    if use_sam:
+                        pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
+                    else:
+                        bbox, logits = groundingdino.predict([filename], [text_prompt], box_threshold=0.0)
+                        bbox = bbox[0].astype(int)
+                        pred_mask = np.zeros_like(gt_mask)
+                        pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1
                 elif model == "biovil":
                     if GRADCAM:
                         pred_mask = run_biovil(filename, text_prompt, gradcam=True)
@@ -208,7 +216,7 @@ def eval_chexlocalize(model, GRADCAM):
     for class_name in PROMPTS:
         mIoU_classes[class_name] = np.mean(iou_results[class_name])
     mIoU_classes['mIoU'] = mIoU
-    json.dump(mIoU_classes, open(f'chexlocalize_{model}_gradcam={GRADCAM}.json', 'w'))
+    json.dump(mIoU_classes, open(f'chexlocalize_{model}_sam={use_sam}.json', 'w'))
     
     return mIoU
 
@@ -219,7 +227,7 @@ class UnitTest:
 
     def run_eval_scripts(self):
         print("Starting Grounded-SAM, CheXlocalize...")
-        print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam"))
+        print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
         # print("Starting Grounded-SAM, PASCAL...")
         # print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam"))
