@@ -190,7 +190,7 @@ class myGroundingDino:
             # Rank with boxes by IoU with grouth truth boxes
             ious = torch.stack([box_iou(gt.unsqueeze(0), pred) for gt, pred in zip(gt_boxes, prediction_boxes)])
             ious = ious.squeeze().clip(0)
-            values, indices = torch.topk(ious, k, dim=1)
+            values, indices = torch.sort(ious, dim=-1, descending=True)
 
             # Filter for top k boxes
             boxes = torch.stack([torch.index_select(pred, 0, ind) for pred, ind in zip(prediction_boxes, indices)])

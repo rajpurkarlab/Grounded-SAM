@@ -231,12 +231,16 @@ def compute_detection_loss(data, my_groundingdino):
     gt_bboxs = data["bbox"].to(my_groundingdino.device)
 
     # Predict bounding box
+    k = 10
     pred_bboxs, logits = my_groundingdino.predict(image_paths, labels, box_threshold=0.0, gt_boxes=gt_bboxs)
+    pred_bboxs = pred_bboxs[:, :k, :]
     gt_bboxs_expanded = gt_bboxs.unsqueeze(1).expand_as(pred_bboxs)
 
     # Compute loss
     loss_box = ops.generalized_box_iou_loss(gt_bboxs_expanded, pred_bboxs, reduction="mean")
-    loss_logit = F.mse_loss(logits, torch.ones_like(logits))
+    desired_logits = torch.zeros_like(logits)
+    desired_logits[:, :k] = 1
+    loss_logit = (logits - desired_logits).abs().mean()
     loss = loss_box + loss_logit
     return loss
 
@@ -313,7 +317,7 @@ class UnitTest:
             "lr": 1e-4,
             "batch_size_adaptation": 32,
             "batch_size_segmentation": 32,
-            "loss_ratio": 5,
+            "loss_ratio": 10,
             "num_epochs": 1,
             "num_workers": 4,
             "use_sam": False,
