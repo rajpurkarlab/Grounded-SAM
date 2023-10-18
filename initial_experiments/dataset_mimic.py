@@ -63,8 +63,7 @@ def load_data(batch_size=16, tensor=False, num_workers=0):
     """Get dataloader for training.
     """
     dataset = MIMICCXRDataset(tensor=tensor)
-    l = len(dataset)
-    return l, DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
 class UnitTest:
     def __init__(self):

@@ -1,6 +1,13 @@
 import torchvision.datasets.voc as voc
-from torchvision import transforms
+import torch
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
+try:
+    from defusedxml.ElementTree import parse as ET_parse
+except ImportError:
+    from xml.etree.ElementTree import parse as ET_parse
+import pickle
+import pdb
 
 class PascalVOC_Dataset(voc.VOCDetection):
     """`Pascal VOC <http://host.robots.ox.ac.uk/pascal/VOC/>`_ Detection Dataset.
@@ -27,38 +34,43 @@ class PascalVOC_Dataset(voc.VOCDetection):
              download=download, 
              transform=transform, 
              target_transform=target_transform)
+        
+        # self.preprocess()
+
+        with open(self.root + "pascalvoc_dataset.pkl", "rb") as f:
+            self.my_data = pickle.load(f)
     
+
+    def preprocess(self):
+        """Preprocess the dataset s.t. each sample if (image_path, label, bbox).
+        """
+        self.my_data = []
+
+        for i in tqdm(range(len(self.images))):
+            anno = self.parse_voc_xml(ET_parse(self.annotations[i]).getroot())["annotation"]
+            for obj in anno["object"]:
+                image_path = self.images[i]
+                label = obj["name"]
+                bbox = [[
+                    int(obj["bndbox"]["xmin"]), 
+                    int(obj["bndbox"]["ymin"]), 
+                    int(obj["bndbox"]["xmax"]), 
+                    int(obj["bndbox"]["ymax"])
+                ]]
+                data = {
+                    "image_path": image_path,
+                    "label": label,
+                    "bbox": torch.Tensor(bbox),
+                }
+                self.my_data.append(data)
     
     def __getitem__(self, index):
-        """
-        Args:
-            index (int): Index
-    
-        Returns:
-            tuple: (image, target) where target is the image segmentation.
-        """
-        return super().__getitem__(index)
-        
+        data = self.my_data[index]
+        data["bbox"] = torch.Tensor(data["bbox"])
+        return data
     
     def __len__(self):
-        """
-        Returns:
-            size of the dataset
-        """
-        return len(self.images)
-
-    
-def transform(image):
-    """
-    Default transform function
-    """
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        # imagenet mean and std
-        transforms.Normalize((0.485, 0.456, 0.406),
-                            (0.229, 0.224, 0.225))
-    ])
-    return transform(image)
+        return len(self.my_data)
 
 
 def load_data(batch_size=16, num_workers=0):
@@ -67,7 +79,7 @@ def load_data(batch_size=16, num_workers=0):
     dataset = PascalVOC_Dataset(
         root="/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/",
         image_set="train",
-        transform=transform
+        transform=None
     )
     return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
@@ -76,23 +88,25 @@ class UnitTest:
     def __init__(self):
         pass
 
+    def view_dataset(self):
+        dataset = PascalVOC_Dataset(
+            root="/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/",
+            image_set="train",
+            transform=None
+        )
+        print(dataset[0])
+
+
     def load_data_test(self):
-        dataloader = load_data(batch_size=4)
+        dataloader = load_data(batch_size=16, num_workers=2)
 
         print("Number of batches:", len(dataloader))
         for i, data in enumerate(tqdm(dataloader)):
-            print(type(data))
+            pass
         print("Passed all tests")
     
 
 if __name__ == "__main__":
-    # unittest = UnitTest()
-    # unittest.load_data_test()
-
-    dataset = PascalVOC_Dataset(
-        root="/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/",
-        image_set="train",
-        transform=transform
-    )
-    print(len(dataset))
-    print(dataset[10])
+    unittest = UnitTest()
+    unittest.view_dataset()
+    unittest.load_data_test()

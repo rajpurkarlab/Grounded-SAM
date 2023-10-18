@@ -8,7 +8,7 @@ sys.path.extend(["../", "./"])
 import pdb
 import torch
 import torchvision
-from torchvision.ops import box_convert
+from torchvision.ops import box_convert, box_iou
 from PIL import Image
 import cv2
 from functools import partial
@@ -44,9 +44,9 @@ class myGroundingDino:
         
         # Load linear probe for Grounding Dino image embedding
         groundingdino_input_dims = [
-            [1, 256, 100, 100],
-            [1, 512, 50, 50],
-            [1, 1024, 25, 25],
+            [1, 256, 32, 32],
+            [1, 512, 16, 16],
+            [1, 1024, 8, 8],
         ]
         self.img_linear = LinearProbe(
             groundingdino_input_dims,
@@ -79,7 +79,7 @@ class myGroundingDino:
                 # S.CenterCrop(800),
                 torchvision.transforms.ToTensor(),
                 torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-                torchvision.transforms.Resize((800, 800)),
+                torchvision.transforms.Resize((256, 256)),
         ])
         image_source = Image.open(image_path).convert("RGB")
         image = np.asarray(image_source)
@@ -161,32 +161,48 @@ class myGroundingDino:
         groundingdino_txt_embedding = self.txt_linear([groundingdino_txt_embedding])
         return groundingdino_txt_embedding
     
-    def predict(self, image_path: str, caption: str, box_threshold: float):  
+
+    def predict(self, image_path: str, caption: str, box_threshold: float, gt_boxes=None, k=10):  
+        """Get predicted bounding box and confidence score for Grounding Dino.
+
+        box_threshold is currently not used, as the box with the highest threshold is always selected.
+        
+        When gt_boxes is give, we will output top k prediction based on iou.
+        """
+        B = len(image_path)
+
         # Prepare images
         source_image, image = self.preprocess_img(image_path)
         caption = [preprocess_caption(c) for c in caption]
 
         # Get prediction
         outputs = self.model(image, captions=caption)
-        prediction_logits = outputs["pred_logits"].cpu().sigmoid()[0]  # prediction_logits.shape = (nq, 256)
-        prediction_boxes = outputs["pred_boxes"].cpu()[0]  # prediction_boxes.shape = (nq, 4)
-
-        # Filter results with confidence threshold
-        mask = prediction_logits.max(dim=1)[0] > box_threshold
-        logits = prediction_logits[mask]  # logits.shape = (n, 256)
-        boxes = prediction_boxes[mask]  # boxes.shape = (n, 4)
-
-        # Filter for the highest confidence box
-        mask = logits.max(dim=1)[0] == logits.max(dim=1)[0].max()
-        logits = logits[mask]  # logits.shape = (1, 256)
-        boxes = boxes[mask]  # boxes.shape = (1, 4)
+        prediction_logits = outputs["pred_logits"].sigmoid()  # prediction_logits.shape = (B, nq, 256)
+        prediction_boxes = outputs["pred_boxes"]  # prediction_boxes.shape = (B, nq, 4)
 
         # Resize boxes from [0, 1] to original dimension of the image
-        h, w, _ = source_image[0].shape
-        boxes = boxes * torch.Tensor([w, h, w, h])
-        boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").detach().numpy()
+        for i in range(B):
+            h, w, _ = source_image[i].shape
+            prediction_boxes[i] = prediction_boxes[i] * torch.Tensor([w, h, w, h]).to(self.device)
+        prediction_boxes = box_convert(boxes=prediction_boxes, in_fmt="cxcywh", out_fmt="xyxy")
+        
+        if gt_boxes is not None:
+            # Rank with boxes by IoU with grouth truth boxes
+            ious = torch.stack([box_iou(gt.unsqueeze(0), pred) for gt, pred in zip(gt_boxes, prediction_boxes)])
+            ious = ious.squeeze().clip(0)
+            values, indices = torch.topk(ious, k, dim=1)
 
-        return boxes, logits.max(dim=1)[0]
+            # Filter for top k boxes
+            boxes = torch.stack([torch.index_select(pred, 0, ind) for pred, ind in zip(prediction_boxes, indices)])
+            logits = torch.stack([torch.index_select(pred, 0, ind) for pred, ind in zip(prediction_logits, indices)])
+            logits = logits.max(dim=2)[0]
+        else:
+            # Filter for the highest confidence box
+            mask = prediction_logits.max(dim=2)[0] == prediction_logits.max(dim=2)[0].max(dim=1)[0].unsqueeze(1) # mask.shape = (B, n)
+            boxes = prediction_boxes[mask]  # boxes.shape = (B, 4)
+            logits = prediction_logits[mask]  # logits.shape = (B, 256)
+            logits = logits.max(dim=1)[0]
+        return boxes, logits
 
 
     def save_model(
@@ -510,8 +526,8 @@ class UnitTest:
     def test_grounding_dino_predict(self):
         # Load model
         grounding_dino = myGroundingDino()
-        IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg"]
-        TEXT_PROMPT = ["2 dogs sitting in their kennels"]
+        IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg", "./initial_experiments/toy_data/chest_x_ray.jpeg"]
+        TEXT_PROMPT = ["2 dogs sitting in their kennels", "This is a image a 2 lungs."]
         BOX_TRESHOLD = 0.35
 
         # Get predicted bbox
@@ -588,7 +604,7 @@ if __name__ == "__main__":
 
     unit_test.test_grounding_dino()
     unit_test.test_grounding_dino_predict()
-    # # unit_test.test_grounding_dino_save()
+    # unit_test.test_grounding_dino_save()
 
     # unit_test.test_biomed_clip()
     # # unit_test.test_biomed_clip_save()

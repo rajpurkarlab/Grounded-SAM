@@ -17,13 +17,14 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchmetrics.classification import Dice
+import torchvision.ops as ops
 from PIL import Image
 from transformers import SamProcessor
 from info_nce import InfoNCE
 
 from model import myGroundingDino, myBiomedCLIP, mySAM
 from dataset_mimic import load_data as load_mimic
-from dataset_pascal import load_data as load_pascal
+from dataset_martin_pascal import load_data as load_pascal
 
 # seed
 seed_value = 42
@@ -45,6 +46,7 @@ def train(hyperparams):
     lr = hyperparams['lr']
     batch_size_ada = hyperparams['batch_size_adaptation']
     batch_size_seg = hyperparams['batch_size_segmentation']
+    loss_ratio = hyperparams['loss_ratio']
     num_epochs = hyperparams['num_epochs']
     num_workers = hyperparams['num_workers']
     save_every = hyperparams['save_every']
@@ -68,11 +70,9 @@ def train(hyperparams):
             )
 
     # Load data
-    num_mimic_samples, mimic_dataloader = load_mimic(batch_size=batch_size_ada, tensor=False, num_workers=num_workers)
-    num_pascal_samples, pascal_dataloader = load_pascal(batch_size=batch_size_seg, num_workers=num_workers)
-    # print(num_mimic_samples / batch_size)
-    # print(int(get_len()/(num_mimic_samples / batch_size)))
-    # pascal_dataloader = load_pascal(batch_size=int(get_len()/(num_mimic_samples / batch_size)), num_workers=num_workers)
+    mimic_dataloader = load_mimic(batch_size=batch_size_ada, tensor=False, num_workers=num_workers)
+    pascal_dataloader = load_pascal(batch_size=batch_size_seg, num_workers=num_workers)
+    pascal_dataloader_iter = inf_data_gen(pascal_dataloader)
 
     # Load model
     my_groundingdino = myGroundingDino(
@@ -108,7 +108,6 @@ def train(hyperparams):
     # Training loop
     for epoch in range(num_epochs):
         
-        it = iter(pascal_dataloader)
         for i, data in enumerate(tqdm(mimic_dataloader, desc=f'Training @ epoch {epoch+1} of {num_epochs}')):
             optimizer.zero_grad()
 
@@ -120,16 +119,15 @@ def train(hyperparams):
             loss_adaptation, groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss = compute_adaptation_loss(
                 image_paths, reports, my_groundingdino, my_biomedclip, my_sam
             )
-            loss_segmentation = torch.tensor(0.0)
-            # loss_segmentation = compute_segmentation_loss(next(it), my_sam) # TODO: add back when segmentation loss is ready
-            loss = loss_adaptation + loss_segmentation
+            loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino)
+            loss = loss_adaptation + loss_ratio * loss_detection
 
             # Log to wandb
             if log_to_wandb:
                 wandb.log({
                         "loss": loss,
                         "loss_adaptation": loss_adaptation,
-                        "loss_segmentation": loss_segmentation,
+                        "loss_detection": loss_detection,
                         "groundingdino_img_loss": groundingdino_img_loss,
                         "groundingdino_txt_loss": groundingdino_txt_loss,
                         "groundingdino_img_txt_loss": groundingdino_img_txt_loss,
@@ -166,6 +164,16 @@ def train(hyperparams):
 
     # Finish wandb session
     wandb.finish()
+
+
+def inf_data_gen(dataloader):
+    """Infinite data generator.
+    
+    Used to loop through dataloader infinitely. We can access it by next(output).
+    """
+    while True:
+        for data in dataloader:
+            yield data
 
 
 def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedclip, my_sam):
@@ -212,7 +220,27 @@ def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedcli
         sam_img_loss = -sam_img_loss
     return (loss, groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss)
 
-    
+
+def compute_detection_loss(data, my_groundingdino):
+    """Compute detection loss."""
+    # Load data
+    image_paths = data["image_path"]
+    labels = data["label"]
+    for i in range(len(labels)):
+        labels[i] = f"An image of a {labels[i]}"
+    gt_bboxs = data["bbox"].to(my_groundingdino.device)
+
+    # Predict bounding box
+    pred_bboxs, logits = my_groundingdino.predict(image_paths, labels, box_threshold=0.0, gt_boxes=gt_bboxs)
+    gt_bboxs_expanded = gt_bboxs.unsqueeze(1).expand_as(pred_bboxs)
+
+    # Compute loss
+    loss_box = ops.generalized_box_iou_loss(gt_bboxs_expanded, pred_bboxs, reduction="mean")
+    loss_logit = F.mse_loss(logits, torch.ones_like(logits))
+    loss = loss_box + loss_logit
+    return loss
+
+
 def compute_segmentation_loss(batch, sam_class, my_sam=None):
     """Compute segmentation loss if sam is activated, otherwise, compute loss based on bbox."""
     sam = sam_class.model
@@ -260,6 +288,16 @@ class UnitTest:
                     sam,
                 )
         print(loss)
+        print("Test adaptation loss passed!")
+
+    def test_detection_loss(self):
+        dataloader = load_pascal(batch_size=16)
+        groundingdino = myGroundingDino()
+        
+        for i, data in enumerate(dataloader):
+            print(compute_detection_loss(data, groundingdino))
+            break
+        print("Test detection loss passed!")
     
     def test_seg_loss(self):
         num_pascal_samples, dataloader = load_pascal(batch_size=2)
@@ -268,19 +306,21 @@ class UnitTest:
         for i, data in enumerate(dataloader):
             print(compute_segmentation_loss(data, sam))
             break
+        print("Test segmentation loss passed!")
     
     def run_training(self):
         hyperparams = {
             "lr": 1e-4,
             "batch_size_adaptation": 32,
-            "batch_size_segmentation": 2,
+            "batch_size_segmentation": 32,
+            "loss_ratio": 5,
             "num_epochs": 1,
             "num_workers": 4,
             "use_sam": False,
             "save_every": 100,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
-            "log_to_wandb": False
+            "log_to_wandb": True,
         }
         train(hyperparams)
         
@@ -289,4 +329,5 @@ if __name__ == "__main__":
     unit_test = UnitTest()
     unit_test.run_training()
     # unit_test.test_adaptation_loss()
+    # unit_test.test_detection_loss()
     # unit_test.test_seg_loss()
