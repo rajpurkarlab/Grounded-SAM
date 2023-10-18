@@ -126,7 +126,7 @@ def train(hyperparams):
             if log_to_wandb:
                 wandb.log({
                         "loss": loss,
-                        "loss_adaptation": lo≈ss_adaptation,
+                        "loss_adaptation": loss_adaptation,
                         "loss_detection": loss_detection,
                         "groundingdino_img_loss": groundingdino_img_loss,
                         "groundingdino_txt_loss": groundingdino_txt_loss,
@@ -226,14 +226,18 @@ def compute_detection_loss(data, my_groundingdino):
     # Load data
     image_paths = data["image_path"]
     labels = data["label"]
-    gt_bboxs = data["bbox"]
+    for i in range(len(labels)):
+        labels[i] = f"An image of a {labels[i]}"
+    gt_bboxs = data["bbox"].to(my_groundingdino.device)
 
     # Predict bounding box
-    pred_bboxs, _ = my_groundingdino.predict(image_paths, labels, box_threshold=0.0)
+    pred_bboxs, logits = my_groundingdino.predict(image_paths, labels, box_threshold=0.0, gt_boxes=gt_bboxs)
+    gt_bboxs_expanded = gt_bboxs.unsqueeze(1).expand_as(pred_bboxs)
 
     # Compute loss
-    loss = ops.generalized_box_iou_loss(gt_bboxs, pred_bboxs, reduction="mean")
-
+    loss_box = ops.generalized_box_iou_loss(gt_bboxs_expanded, pred_bboxs, reduction="mean")
+    loss_logit = F.mse_loss(logits, torch.ones_like(logits))
+    loss = loss_box + loss_logit
     return loss
 
 
@@ -307,8 +311,8 @@ class UnitTest:
     def run_training(self):
         hyperparams = {
             "lr": 1e-4,
-            "batch_size_adaptation": 16,
-            "batch_size_segmentation": 16,
+            "batch_size_adaptation": 32,
+            "batch_size_segmentation": 32,
             "loss_ratio": 5,
             "num_epochs": 1,
             "num_workers": 4,
@@ -316,7 +320,7 @@ class UnitTest:
             "save_every": 100,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
-            "log_to_wandb": True
+            "log_to_wandb": True,
         }
         train(hyperparams)
         

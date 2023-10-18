@@ -20,6 +20,7 @@ import argparse
 import sys
 import numpy as np
 from tqdm import tqdm
+import torch
 
 from utils import PROMPTS, get_iou, get_queries
 from models.grounded_sam import run_grounded_sam, env_setup, load_models
@@ -141,7 +142,7 @@ def eval_chexlocalize(model, GRADCAM, use_sam=False):
         groundingdino = myGroundingDino(
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             # ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
-            ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_100.pth",
+            ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_404.pth",
         )
         groundingdino_model = groundingdino.model
 
@@ -182,7 +183,8 @@ def eval_chexlocalize(model, GRADCAM, use_sam=False):
                         pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
                     else:
                         bbox, logits = groundingdino.predict([filename], [text_prompt], box_threshold=0.0)
-                        bbox = bbox[0].detach().numpy().astype(int)
+                        # bbox = bbox[0].detach().numpy().astype(int)
+                        bbox = bbox[0].type(torch.int64)
                         pred_mask = np.zeros_like(gt_mask)
                         pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1
                 elif model == "biovil":

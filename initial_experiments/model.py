@@ -8,7 +8,7 @@ sys.path.extend(["../", "./"])
 import pdb
 import torch
 import torchvision
-from torchvision.ops import box_convert
+from torchvision.ops import box_convert, box_iou
 from PIL import Image
 import cv2
 from functools import partial
@@ -162,10 +162,12 @@ class myGroundingDino:
         return groundingdino_txt_embedding
     
 
-    def predict(self, image_path: str, caption: str, box_threshold: float):  
+    def predict(self, image_path: str, caption: str, box_threshold: float, gt_boxes=None, k=10):  
         """Get predicted bounding box and confidence score for Grounding Dino.
 
         box_threshold is currently not used, as the box with the highest threshold is always selected.
+        
+        When gt_boxes is give, we will output top k prediction based on iou.
         """
         B = len(image_path)
 
@@ -175,26 +177,32 @@ class myGroundingDino:
 
         # Get prediction
         outputs = self.model(image, captions=caption)
-        prediction_logits = outputs["pred_logits"].cpu().sigmoid()  # prediction_logits.shape = (B, nq, 256)
-        prediction_boxes = outputs["pred_boxes"].cpu()  # prediction_boxes.shape = (B, nq, 4)
-
-        # # Filter results with confidence threshold
-        # mask = prediction_logits.max(dim=2)[0] > box_threshold # mask.shape = (B, nq)
-        # logits = prediction_logits[mask].view(B, -1, 256)  # logits.shape = (B, n, 256)
-        # boxes = prediction_boxes[mask].view(B, -1, 4)  # boxes.shape = (B, n, 4)
-
-        # Filter for the highest confidence box
-        mask = prediction_logits.max(dim=2)[0] == prediction_logits.max(dim=2)[0].max(dim=1)[0].unsqueeze(1) # mask.shape = (B, n)
-        logits = prediction_logits[mask]  # logits.shape = (B, 256)
-        boxes = prediction_boxes[mask]  # boxes.shape = (B, 4)
+        prediction_logits = outputs["pred_logits"].sigmoid()  # prediction_logits.shape = (B, nq, 256)
+        prediction_boxes = outputs["pred_boxes"]  # prediction_boxes.shape = (B, nq, 4)
 
         # Resize boxes from [0, 1] to original dimension of the image
         for i in range(B):
             h, w, _ = source_image[i].shape
-            boxes[i] = boxes[i] * torch.Tensor([w, h, w, h])
-        boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy")
+            prediction_boxes[i] = prediction_boxes[i] * torch.Tensor([w, h, w, h]).to(self.device)
+        prediction_boxes = box_convert(boxes=prediction_boxes, in_fmt="cxcywh", out_fmt="xyxy")
+        
+        if gt_boxes is not None:
+            # Rank with boxes by IoU with grouth truth boxes
+            ious = torch.stack([box_iou(gt.unsqueeze(0), pred) for gt, pred in zip(gt_boxes, prediction_boxes)])
+            ious = ious.squeeze().clip(0)
+            values, indices = torch.topk(ious, k, dim=1)
 
-        return boxes, logits.max(dim=1)[0]
+            # Filter for top k boxes
+            boxes = torch.stack([torch.index_select(pred, 0, ind) for pred, ind in zip(prediction_boxes, indices)])
+            logits = torch.stack([torch.index_select(pred, 0, ind) for pred, ind in zip(prediction_logits, indices)])
+            logits = logits.max(dim=2)[0]
+        else:
+            # Filter for the highest confidence box
+            mask = prediction_logits.max(dim=2)[0] == prediction_logits.max(dim=2)[0].max(dim=1)[0].unsqueeze(1) # mask.shape = (B, n)
+            boxes = prediction_boxes[mask]  # boxes.shape = (B, 4)
+            logits = prediction_logits[mask]  # logits.shape = (B, 256)
+            logits = logits.max(dim=1)[0]
+        return boxes, logits
 
 
     def save_model(
