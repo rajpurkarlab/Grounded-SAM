@@ -139,3 +139,6 @@ datasets/*
 
 # wandb
 /wandb
+
+# result
+/result_json
