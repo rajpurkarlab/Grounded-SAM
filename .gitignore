@@ -135,7 +135,6 @@ outputs/
 .idea/
 
 *.json
-datasets/*
 
 # wandb
 /wandb
