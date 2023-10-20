@@ -213,7 +213,7 @@ class myGroundingDino:
             txt_linear_ckpt="groundingdino_txt_linear.pth"
         ):
         """Save linear probe for image embedding and text embedding."""
-        torch.save({"model": self.model.backbone.state_dict()}, ckpt_folder + backbone_ckpt)
+        torch.save({"model": self.model.state_dict()}, ckpt_folder + backbone_ckpt) # self.model.backbone
         torch.save(self.img_linear.state_dict(), ckpt_folder + img_linear_ckpt)
         torch.save(self.txt_linear.state_dict(), ckpt_folder + txt_linear_ckpt)
 
@@ -604,7 +604,7 @@ if __name__ == "__main__":
 
     unit_test.test_grounding_dino()
     unit_test.test_grounding_dino_predict()
-    # unit_test.test_grounding_dino_save()
+    unit_test.test_grounding_dino_save()
 
     # unit_test.test_biomed_clip()
     # # unit_test.test_biomed_clip_save()
