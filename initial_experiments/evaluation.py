@@ -12,6 +12,7 @@ warnings.simplefilter("ignore")
 import sys
 sys.path.extend(["../", "./"])
 import pdb
+from PIL import Image
 
 import json
 from uuid import uuid4
@@ -82,7 +83,7 @@ def eval_pascal(model, GRADCAM):
 
         # load ground truth
         gt_path = gt_folder_path + '/' + id + '.png'
-        gt_masks = get_queries(gt_path)
+        gt_masks = get_queries(gt_path, Image.open(img_path).size)
 
         # run through all classes
         for class_name in class_names:
@@ -95,28 +96,29 @@ def eval_pascal(model, GRADCAM):
             # run grounded sam
             text_prompt = 'a ' + class_name
 
-            try:
-                if model == "grounded-sam":
-                    pred_mask = run_grounded_sam(img_path, text_prompt, groundingdino_model, sam_predictor)
-                elif model == "biovil":
-                    if GRADCAM:
-                        pred_mask = run_biovil(img_path, text_prompt, gradcam=True)
-                    else:
-                        pred_mask = run_biovil(img_path, text_prompt)
+            # try:
+            if model == "grounded-sam":
+                pred_mask = run_grounded_sam(img_path, text_prompt, groundingdino_model, sam_predictor)
+            elif model == "biovil":
+                if GRADCAM:
+                    pred_mask = run_biovil(img_path, text_prompt, gradcam=True)
                 else:
-                    raise NotImplementedError(f"Model {model} not supported")   
-                
-                pred_mask = (pred_mask != 0).astype(int)
+                    pred_mask = run_biovil(img_path, text_prompt)
+            else:
+                raise NotImplementedError(f"Model {model} not supported")   
+            
+            pred_mask = (pred_mask != 0).astype(int)
 
-                # compute iou
-                try:
-                    iou_score = get_iou(pred_mask, gt_mask)
-                except:
-                    iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
-                
-                iou_results[class_name].append(iou_score)
+            # compute iou
+            try:
+                iou_score = get_iou(pred_mask, gt_mask)
             except:
-                print(f"\nSkipping {img_path}, {text_prompt} due to errors\n")
+                iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
+            
+            iou_results[class_name].append(iou_score)
+            print(iou_score)
+            # except:
+            #     print(f"\nSkipping {img_path}, {text_prompt} due to errors\n")
 
     # compute average mIoU across all classes
     total_sum = 0
@@ -142,7 +144,7 @@ def eval_chexlocalize(model, GRADCAM, use_sam=False):
         groundingdino = myGroundingDino(
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             # ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
-            ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_404.pth",
+            ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_3030.pth",
         )
         groundingdino_model = groundingdino.model
 

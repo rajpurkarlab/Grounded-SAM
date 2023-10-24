@@ -8,6 +8,7 @@ except ImportError:
     from xml.etree.ElementTree import parse as ET_parse
 import pickle
 import pdb
+import numpy as np
 
 class PascalVOC_Dataset(voc.VOCDetection):
     """`Pascal VOC <http://host.robots.ox.ac.uk/pascal/VOC/>`_ Detection Dataset.
@@ -48,21 +49,41 @@ class PascalVOC_Dataset(voc.VOCDetection):
 
         for i in tqdm(range(len(self.images))):
             anno = self.parse_voc_xml(ET_parse(self.annotations[i]).getroot())["annotation"]
+            image_path = self.images[i]
+            
+            labels = {}
+            
             for obj in anno["object"]:
-                image_path = self.images[i]
                 label = obj["name"]
-                bbox = [[
+                if label not in labels:
+                    labels[label] = []
+                labels[label].append([
                     int(obj["bndbox"]["xmin"]), 
                     int(obj["bndbox"]["ymin"]), 
                     int(obj["bndbox"]["xmax"]), 
                     int(obj["bndbox"]["ymax"])
-                ]]
+                ])
+            for label in labels:
                 data = {
                     "image_path": image_path,
                     "label": label,
-                    "bbox": torch.Tensor(bbox),
+                    "bbox": labels[label],
                 }
+                
                 self.my_data.append(data)
+        
+        bbox_shapes = [len(data["bbox"]) for data in self.my_data]
+        max_dim0_shape = max(bbox_shapes)
+
+        for i in range(len(self.my_data)):
+            data = self.my_data[i]
+            bboxs = data["bbox"]
+            for j in range(max_dim0_shape - len(bboxs)):
+                bboxs.append([-1.,-1.,-1.,-1.])
+            data["bbox"] = torch.Tensor(bboxs)
+        
+        with open(self.root + "pascalvoc_dataset.pkl", "wb") as f:
+            pickle.dump(self.my_data, f)
     
     def __getitem__(self, index):
         data = self.my_data[index]

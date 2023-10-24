@@ -32,16 +32,16 @@ from segment_anything import build_sam_vit_h, build_sam_vit_l, SamPredictor
 
 from model import myGroundingDino, myBiomedCLIP, mySAM
 
-def eval_results(dataset, model, GRADCAM=False, use_sam=False):
+def eval_results(dataset, model, ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth", GRADCAM=False, use_sam=False):
     if dataset == "chexlocalize":
-        mIoU = eval_chexlocalize(model, GRADCAM, use_sam=use_sam)
+        mIoU = eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=use_sam)
     elif dataset == "pascal":
-        mIoU = eval_pascal(model, GRADCAM)
+        mIoU = eval_pascal(model, GRADCAM, ckpt_file)
     else:
         raise NotImplementedError(f"Dataset {dataset} not supported")
     return mIoU
 
-def eval_pascal(model, GRADCAM, ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth", use_sam=False):
+def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
     # Specify paths
     val_id_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/val.txt'
     class_name_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/class_names.txt'
@@ -62,10 +62,10 @@ def eval_pascal(model, GRADCAM, ckpt_file="./initial_experiments/ckpts/grounding
     # Load model
     if model == "grounded-sam":
         env_setup()
+        print(ckpt_file)
         groundingdino = myGroundingDino(
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
-            ckpt_file=
-            "./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
+            ckpt_file=ckpt_file,
         )
         groundingdino_model = groundingdino.model
 
@@ -167,15 +167,17 @@ def eval_pascal(model, GRADCAM, ckpt_file="./initial_experiments/ckpts/grounding
     
     return mIoU
 
-def eval_chexlocalize(model, GRADCAM, use_sam=False):
+def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
     # Load model
+    print(ckpt_file)
     if model == "grounded-sam":
         env_setup()
+        
         groundingdino = myGroundingDino(
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             ckpt_file=ckpt_file,
-            # ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_3030.pth",
         )
+        
         groundingdino_model = groundingdino.model
 
         if use_sam:
@@ -264,9 +266,14 @@ class UnitTest:
         # print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
         # print("Starting Grounded-SAM, PASCAL...")
-        print("Grounded-SAM, PASCAL - 202: ", eval_results("pascal", "grounded-sam", "ckpts/initial_experiments_groundingdino_backbone_202.pth"))
+        # print("Grounded-SAM, PASCAL - 202: ", eval_results("pascal", "grounded-sam"))
         
-        print("Grounded-SAM, PASCAL - 3030: ", eval_results("pascal", "grounded-sam", "ckpts/initial_experiments_groundingdino_backbone_3030.pth"))
+        print(eval_results("chexlocalize", "grounded-sam"))
+        # print("Grounded-SAM, CheXlocalize adaptation only - 303: ", eval_results("chexlocalize", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
+        
+        # print("Grounded-SAM, PASCAL adaptation only - 303: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
+
+        # print("Grounded-SAM, PASCAL - 6565: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_6565.pth"))
         
         # print("Starting BioViL, CheXlocalize, GRADCAM=False...")
         # print("BioViL, CheXlocalize, GRADCAM=False: ", eval_results("chexlocalize", "biovil"))

@@ -30,7 +30,10 @@ class myGroundingDino:
     def __init__(
         self,
         config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
-        ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
+        # ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
+        # img_linear_ckpt=None,
+        # txt_linear_ckpt=None,
+        ckpt_file="./initial_experiments/ckpts/groundingdino_backbone_5151.pth",
         img_linear_ckpt=None,
         txt_linear_ckpt=None,
         device="cuda",
@@ -162,7 +165,7 @@ class myGroundingDino:
         return groundingdino_txt_embedding
     
 
-    def predict(self, image_path: str, caption: str, box_threshold: float, gt_boxes=None, k=10):  
+    def predict(self, image_path, caption: str, box_threshold: float, gt_boxes=None, k=10):  
         """Get predicted bounding box and confidence score for Grounding Dino.
 
         box_threshold is currently not used, as the box with the highest threshold is always selected.
