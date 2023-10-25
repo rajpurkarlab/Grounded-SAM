@@ -82,10 +82,10 @@ def train(hyperparams):
     # Load model
     my_groundingdino = myGroundingDino(
         config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
-        # ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth", # TODO: resume from last time
-        ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_5151.pth",
-        img_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_5151.pth",
-        txt_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_5151.pth",
+        ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
+        ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth",
+        img_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
+        txt_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
         device=device,
     )
     my_groundingdino.model.backbone.train()
@@ -112,13 +112,14 @@ def train(hyperparams):
         optimizer = torch.optim.Adam(groundingdino_params + sam_params, lr=lr)
     else:
         optimizer = torch.optim.Adam(groundingdino_params, lr=lr)    
+
+    # Load scheduler
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, eta_min=1e-5)
     
     # Training loop
     for epoch in range(num_epochs):
         
         for i, data in enumerate(tqdm(mimic_dataloader, desc=f'Training @ epoch {epoch+1} of {num_epochs}')):
-            if i < 5152: # TODO: resume from last time
-                continue
             optimizer.zero_grad()
 
             # Load data
@@ -130,25 +131,23 @@ def train(hyperparams):
                 image_paths, reports, my_groundingdino, my_biomedclip, my_sam
             )
             loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
-            # loss = loss_detection
             loss = loss_adaptation + loss_ratio * loss_detection
             
             # Log to wandb
             if log_to_wandb:
                 wandb.log({
-                        "loss": loss,
-                        "loss_adaptation": loss_adaptation,
-                        "loss_detection": loss_detection,
-                        "groundingdino_img_loss": groundingdino_img_loss,
-                        "groundingdino_txt_loss": groundingdino_txt_loss,
-                        # "groundingdino_img_txt_loss": groundingdino_img_txt_loss,
-                        # "iou": results,
-                        # "sam_img_loss": sam_img_loss,
+                        "train/loss": loss,
+                        "train/loss_adaptation": loss_adaptation,
+                        "train/loss_detection": loss_detection,
+                        "train/groundingdino_img_loss": groundingdino_img_loss,
+                        "train/groundingdino_txt_loss": groundingdino_txt_loss,
+                        "train/learning_rate": scheduler.get_last_lr()[0],
                     })
             
             # Training step
             loss.backward()
             optimizer.step()
+            scheduler.step()
             
             # Save model
             if i % (save_every+1) == 0 and i != 0:
@@ -169,8 +168,8 @@ def train(hyperparams):
                 iou_pascal, iou_chex = eval_results("pascal", "grounded-sam", f"./initial_experiments/ckpts_resume/initial_experiments_groundingdino_backbone_{i}.pth"), eval_results("chexlocalize", "grounded-sam", f"./initial_experiments/ckpts_resume/initial_experiments_groundingdino_backbone_{i}.pth")
                 if log_to_wandb:
                     wandb.log({
-                        "iou_pascal": iou_pascal, 
-                        "iou_chex": iou_chex,
+                        "val/iou_pascal": iou_pascal, 
+                        "val/iou_chex": iou_chex,
                         })
 
     # Finish wandb session
@@ -250,6 +249,7 @@ def compute_detection_loss(data, my_groundingdino, step, viz=False):
         best_box = -1
         bboxs = gt_bboxs[b]
         
+        # Find gt bbox with the highest IoU (i.e., smallest loss) with prediction
         for idx, box in enumerate(bboxs):
             if (box != -1).any():
                 loss = ops.generalized_box_iou_loss(box, pred_bboxs[b], reduction="mean")
@@ -365,8 +365,8 @@ class UnitTest:
             "use_sam": False,
             "save_every": 100,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-            "save_folder": "./initial_experiments/ckpts_resume/",
-            "log_to_wandb": True,
+            "save_folder": "./initial_experiments/ckpts/",
+            "log_to_wandb": False,
         }
         train(hyperparams)
         

@@ -43,10 +43,11 @@ class PascalVOC_Dataset(voc.VOCDetection):
     
 
     def preprocess(self):
-        """Preprocess the dataset s.t. each sample if (image_path, label, bbox).
+        """Preprocess the dataset s.t. each sample if (image_path, label, list of all bbox for that label).
         """
         self.my_data = []
 
+        # Loop through all images
         for i in tqdm(range(len(self.images))):
             anno = self.parse_voc_xml(ET_parse(self.annotations[i]).getroot())["annotation"]
             image_path = self.images[i]
@@ -72,6 +73,7 @@ class PascalVOC_Dataset(voc.VOCDetection):
                 
                 self.my_data.append(data)
         
+        # Pad bboxs to have same shape
         bbox_shapes = [len(data["bbox"]) for data in self.my_data]
         max_dim0_shape = max(bbox_shapes)
 
