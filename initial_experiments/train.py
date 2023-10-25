@@ -83,7 +83,7 @@ def train(hyperparams):
     my_groundingdino = myGroundingDino(
         config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
         ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
-        ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth",
+        # ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth",
         img_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
         txt_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
         device=device,
@@ -165,11 +165,20 @@ def train(hyperparams):
                     )
 
                 # Evaluation
-                iou_pascal, iou_chex = eval_results("pascal", "grounded-sam", f"./initial_experiments/ckpts_resume/initial_experiments_groundingdino_backbone_{i}.pth"), eval_results("chexlocalize", "grounded-sam", f"./initial_experiments/ckpts_resume/initial_experiments_groundingdino_backbone_{i}.pth")
+                iou_pascal = eval_results("pascal", "grounded-sam", f"./initial_experiments/ckpts_resume/initial_experiments_groundingdino_backbone_{i}.pth")
+                iou_chex = eval_results("chexlocalize", "grounded-sam", f"./initial_experiments/ckpts_resume/initial_experiments_groundingdino_backbone_{i}.pth")
+                auc_chexpert = eval_results(
+                    dataset = "chexpert", 
+                    model = "grounded-sam",
+                    ckpt_file = f"./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_{i}.pth", 
+                    ckpt_img_linear = f"./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_{i}.pth",
+                    ckpt_txt_linear = f"./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_{i}.pth",
+                )
                 if log_to_wandb:
                     wandb.log({
                         "val/iou_pascal": iou_pascal, 
                         "val/iou_chex": iou_chex,
+                        "val/auc_chexpert": auc_chexpert,
                         })
 
     # Finish wandb session
@@ -356,17 +365,17 @@ class UnitTest:
     
     def run_training(self):
         hyperparams = {
-            "lr": 1e-4,
+            "lr": 2e-4,
             "batch_size_adaptation": 16,
             "batch_size_segmentation": 16,
-            "loss_ratio": 5,
+            "loss_ratio": 2,
             "num_epochs": 1,
             "num_workers": 4,
             "use_sam": False,
             "save_every": 100,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
-            "log_to_wandb": False,
+            "log_to_wandb": True,
         }
         train(hyperparams)
         

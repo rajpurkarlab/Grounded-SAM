@@ -62,7 +62,9 @@ PROMPTS = { # Baseline prompts
     "Atelectasis": "Findings suggesting atelectasis",
     "Pneumothorax": "Findings suggesting pneumothorax",
     "Pleural Effusion": "Findings suggesting pleural effusion",
-    "Support Devices": "Support devices" 
+    "Support Devices": "Support devices",
+    "No Finding": "No finding",
+    "Fracture": "Findings suggesting a fracture",
 }
 
 def get_iou(pred_mask, gt_mask):

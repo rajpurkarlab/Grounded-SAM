@@ -22,8 +22,11 @@ import pycocotools.mask as mask_util
 import argparse
 import sys
 import numpy as np
+import pandas as pd
+from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 import torch
+import torch.nn.functional as F
 
 from utils import PROMPTS, get_iou, get_queries
 from models.grounded_sam import run_grounded_sam, env_setup, load_models
@@ -32,14 +35,20 @@ from segment_anything import build_sam_vit_h, build_sam_vit_l, SamPredictor
 
 from model import myGroundingDino, myBiomedCLIP, mySAM
 
-def eval_results(dataset, model, ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth", GRADCAM=False, use_sam=False):
+def eval_results(
+    dataset, model, ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth", 
+    ckpt_img_linear=None, ckpt_txt_linear=None, linear=None,
+    GRADCAM=False, use_sam=False
+):
     if dataset == "chexlocalize":
-        mIoU = eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=use_sam)
+        result = eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=use_sam) # mIoU
     elif dataset == "pascal":
-        mIoU = eval_pascal(model, GRADCAM, ckpt_file)
+        result = eval_pascal(model, GRADCAM, ckpt_file) # mIoU
+    elif dataset == "chexpert":
+        result = eval_chexpert(model, ckpt_file, ckpt_img_linear, ckpt_txt_linear) # mAUC
     else:
         raise NotImplementedError(f"Dataset {dataset} not supported")
-    return mIoU
+    return result
 
 def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
     # Specify paths
@@ -257,6 +266,74 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
     return mIoU
 
 
+def eval_chexpert(model, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
+    # Load model
+    print(ckpt_file)
+    env_setup()
+    groundingdino = myGroundingDino(
+        config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
+        ckpt_file=ckpt_file,
+        img_linear_ckpt=ckpt_img_linear,
+        txt_linear_ckpt=ckpt_txt_linear,
+    )
+
+    # Load CheXlocalize test set
+    df = pd.read_csv("datasets/chexlocalize/CheXpert/test_labels.csv")
+    classes = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Pleural Effusion", "No Finding"]
+    gt_results = {prompt: [] for prompt in classes}
+    pred_results = {prompt: [] for prompt in classes}
+
+    # Get text embedding
+    groundingdino_txt_embeddings = {}
+    for query in gt_results.keys():
+        text_prompt = PROMPTS[query]
+        groundingdino_txt_embedding = groundingdino.get_txt_emb([text_prompt])
+        groundingdino_txt_embedding = groundingdino.align_txt_emb(groundingdino_txt_embedding)
+        groundingdino_txt_embeddings[query] = groundingdino_txt_embedding
+
+
+    # Loop through all test samples (pathology, image, ground-truth mask) tuples
+    ctr = 0
+    for i, row in tqdm(df.iterrows()):
+        filename = "datasets/chexlocalize/CheXpert/" + row['Path']
+
+        # Get image embedding 
+        groundingdino_img_embedding = groundingdino.get_img_emb([filename])
+        groundingdino_img_embedding = groundingdino.align_img_emb(groundingdino_img_embedding)
+        
+        # Loop through all pathologies in a test sample
+        for query in row.keys():
+            # Load class
+            if query not in classes:
+                continue
+            
+            # Load gt label
+            gt_label = row[query]
+
+            # Get pred label
+            text_prompt = PROMPTS[query]
+            cosine_sim = F.cosine_similarity(groundingdino_img_embedding, groundingdino_txt_embeddings[query])
+            prob = torch.sigmoid(cosine_sim)
+            pred_label = (prob > 0.5).float().item()
+
+            # Append to results
+            gt_results[query].append(gt_label)
+            pred_results[query].append(pred_label)
+
+    # Compute AUC for each pathology
+    auc_results = {prompt: 0 for prompt in classes}
+    for class_name in classes:
+        AUC = roc_auc_score(gt_results[class_name], pred_results[class_name])
+        auc_results[class_name] = AUC
+
+    # Save to json
+    json.dump(auc_results, open(f'chexpert_{model}.json', 'w'))
+    
+    mAUC = np.mean(list(auc_results.values()))
+    return mAUC
+
+
+
 class UnitTest:
     def __init__(self):
         pass
@@ -268,7 +345,7 @@ class UnitTest:
         # print("Starting Grounded-SAM, PASCAL...")
         # print("Grounded-SAM, PASCAL - 202: ", eval_results("pascal", "grounded-sam"))
         
-        print(eval_results("chexlocalize", "grounded-sam"))
+        # print(eval_results("chexlocalize", "grounded-sam"))
         # print("Grounded-SAM, CheXlocalize adaptation only - 303: ", eval_results("chexlocalize", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
         
         # print("Grounded-SAM, PASCAL adaptation only - 303: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
@@ -287,7 +364,37 @@ class UnitTest:
         # print("Starting BioViL, PASCAL, GRADCAM=True...")
         # print("BioViL, PASCAL, GRADCAM=True: ", eval_results("pascal", "biovil", GRADCAM=True))
 
+        print("Starting Grounded-SAM, CheXpert...")
+        print("Grounded-SAM, CheXpert: ", eval_results(
+            dataset = "chexpert", 
+            model = "grounded-sam",
+            ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth", 
+            ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
+            ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
+        ))
+
+
+def displace_results():
+    import json
+    import pandas as pd
+    from tabulate import tabulate
+
+    # Load results
+    groundingdino_baseline = json.load(open('./chexpert_grounding_dino_baseline_1020.json'))
+    groundingdino_190k = json.load(open('./chexpert_grounding_dino_190k_1020.json'))
+
+    # Display results in a table
+    df = pd.DataFrame({
+        "GroundingDINO (baseline)": groundingdino_baseline,
+        "GroundingDINO (190k)": groundingdino_190k,
+    })
+    table = tabulate(df, headers='keys', tablefmt='grid')
+    title = "AUC results on CheXpert test set"
+    print(title.center(len(table.splitlines()[0])))
+    print(table)
+
 
 if __name__=='__main__':
-    unit_test = UnitTest()
-    unit_test.run_eval_scripts()
+    # unit_test = UnitTest()
+    # unit_test.run_eval_scripts()
+    displace_results()
