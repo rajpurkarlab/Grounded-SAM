@@ -2,6 +2,7 @@
 
 Iteratively train between adaptation and segmentation objectives:
     - Adaptation: train Grounded SAM to align with frozen biomed CLIP using medical dataset.
+    - Medical: train Grounded SAM to align the image and report embeddings using medical dataset.
     - Segmentation: train Grounded SAM with its original objective using natural dataset.
 """
 import os
@@ -114,7 +115,7 @@ def train(hyperparams):
         optimizer = torch.optim.Adam(groundingdino_params, lr=lr)    
 
     # Load scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, eta_min=1e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, eta_min=5e-5)
     
     # Training loop
     for epoch in range(num_epochs):
@@ -127,20 +128,23 @@ def train(hyperparams):
             reports = data["report"]
 
             # Compute loss
-            loss_adaptation, groundingdino_img_loss, groundingdino_txt_loss, sam_img_loss = compute_adaptation_loss(
-                image_paths, reports, my_groundingdino, my_biomedclip, my_sam
-            )
+            # loss_adaptation, groundingdino_img_loss, groundingdino_txt_loss, sam_img_loss = compute_adaptation_loss(
+            #     image_paths, reports, my_groundingdino, my_biomedclip, my_sam
+            # )
+            loss_medical = compute_medical_loss(image_paths, reports, my_groundingdino)
             loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
-            loss = loss_adaptation + loss_ratio * loss_detection
+            # loss = loss_adaptation + loss_ratio * loss_detection
+            loss = loss_medical + loss_ratio * loss_detection
             
             # Log to wandb
             if log_to_wandb:
                 wandb.log({
                         "train/loss": loss,
-                        "train/loss_adaptation": loss_adaptation,
+                        "train/loss_medical": loss_medical,
                         "train/loss_detection": loss_detection,
-                        "train/groundingdino_img_loss": groundingdino_img_loss,
-                        "train/groundingdino_txt_loss": groundingdino_txt_loss,
+                        # "train/loss_adaptation": loss_adaptation,
+                        # "train/groundingdino_img_loss": groundingdino_img_loss,
+                        # "train/groundingdino_txt_loss": groundingdino_txt_loss,
                         "train/learning_rate": scheduler.get_last_lr()[0],
                     })
             
@@ -165,8 +169,8 @@ def train(hyperparams):
                     )
 
                 # Evaluation
-                iou_pascal = eval_results("pascal", "grounded-sam", f"./initial_experiments/ckpts_resume/initial_experiments_groundingdino_backbone_{i}.pth")
-                iou_chex = eval_results("chexlocalize", "grounded-sam", f"./initial_experiments/ckpts_resume/initial_experiments_groundingdino_backbone_{i}.pth")
+                iou_pascal = eval_results("pascal", "grounded-sam", f"./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_{i}.pth")
+                iou_chex = eval_results("chexlocalize", "grounded-sam", f"./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_{i}.pth")
                 auc_chexpert = eval_results(
                     dataset = "chexpert", 
                     model = "grounded-sam",
@@ -238,6 +242,25 @@ def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedcli
         groundingdino_img_txt_loss = -groundingdino_img_txt_loss
         sam_img_loss = -sam_img_loss
     return (loss, groundingdino_img_loss, groundingdino_txt_loss, sam_img_loss)
+
+
+def compute_medical_loss(image_paths, reports, my_groundingdino):
+    """Compute InfoNCE loss between image and report embeddings of groundingdino.
+    
+    The purpose here is to inject "medical" knowledge into groundingdino.
+    """
+    # Get embeddings
+    groundingdino_img_emb = my_groundingdino.get_img_emb(image_paths)
+    groundingdino_img_emb = my_groundingdino.align_img_emb(groundingdino_img_emb)
+    groundingdino_txt_emb = my_groundingdino.get_txt_emb(reports)
+    groundingdino_txt_emb = my_groundingdino.align_txt_emb(groundingdino_txt_emb)
+
+    # Define loss function
+    loss_fn = InfoNCE()
+
+    # Get loss
+    contrastive_loss = loss_fn(groundingdino_img_emb, groundingdino_txt_emb).mean()
+    return contrastive_loss
 
 
 def compute_detection_loss(data, my_groundingdino, step, viz=False):
@@ -362,17 +385,28 @@ class UnitTest:
             print(compute_segmentation_loss(data, sam))
             break
         print("Test segmentation loss passed!")
+
+    def test_medical_loss(self):
+        groundingdino = myGroundingDino()
+        
+        loss = compute_medical_loss(
+                    ["datasets/chexlocalize/CheXpert/test/patient64741/study1/view1_frontal.jpg"],
+                    ["Lung lesion"],
+                    groundingdino,
+                )
+        print(loss)
+        print("Test medical loss passed!")
     
     def run_training(self):
         hyperparams = {
-            "lr": 2e-4,
+            "lr": 5e-4,
             "batch_size_adaptation": 16,
             "batch_size_segmentation": 16,
-            "loss_ratio": 2,
-            "num_epochs": 1,
+            "loss_ratio": 5,
+            "num_epochs": 3,
             "num_workers": 4,
             "use_sam": False,
-            "save_every": 100,
+            "save_every": 200,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
             "log_to_wandb": True,
@@ -386,3 +420,4 @@ if __name__ == "__main__":
     # unit_test.test_adaptation_loss()
     # unit_test.test_detection_loss()
     # unit_test.test_seg_loss()
+    # unit_test.test_medical_loss()

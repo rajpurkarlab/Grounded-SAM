@@ -30,10 +30,8 @@ class myGroundingDino:
     def __init__(
         self,
         config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
-        # ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
-        # img_linear_ckpt=None,
-        # txt_linear_ckpt=None,
-        ckpt_file="./initial_experiments/ckpts/groundingdino_backbone_5151.pth",
+        ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
+        # ckpt_file="./initial_experiments/ckpts/groundingdino_backbone_5151.pth",
         img_linear_ckpt=None,
         txt_linear_ckpt=None,
         device="cuda",
