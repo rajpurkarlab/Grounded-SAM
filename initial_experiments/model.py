@@ -17,10 +17,15 @@ from segment_anything.utils.transforms import ResizeLongestSide
 from segment_anything import sam_model_registry, build_sam, SamPredictor
 from segment_anything.modeling import ImageEncoderViT, MaskDecoder, PromptEncoder, Sam, TwoWayTransformer
 
+# Grounded sam
 from models.grounded_sam import *
 from groundingdino.util.misc import nested_tensor_from_tensor_list
 from models.GroundingDINO.groundingdino.models.GroundingDINO.bertwarper import generate_masks_with_special_tokens_and_transfer_map_nocate
 from models.GroundingDINO.groundingdino.util.inference import load_model, preprocess_caption
+
+# Load CheXzero
+from models.chexzero import load_chexzero_and_transform
+import models.CheXzero.clip as clip
 
 from linear_probe import LinearProbe
 
@@ -484,6 +489,66 @@ class mySAM:
         torch.save(self.img_linear.state_dict(), ckpt_folder + img_linear_ckpt)
 
 
+class myCheXzero:
+    
+    def __init__(
+        self,
+        ckpt_file=None,
+        device="cuda",
+    ):
+        """CheXZero - model(image encoder, text encoder).
+        """
+        # Load CheXZero
+        self.model, self.preprocess_image = load_chexzero_and_transform()
+        self.model.to(device)
+        self.device = device
+
+        # Load checkpoint
+        if ckpt_file:
+            self.model.load_state_dict(torch.load(ckpt_file, map_location=device))
+
+    
+    def preprocess_img(self, image_paths):
+        # Preprocess images
+        images = []
+        for image_path in image_paths:
+            img = Image.open(image_path).convert("RGB")
+            img = self.preprocess_image(img).to(self.device)
+            images.append(img)
+        images = torch.stack(images)
+        return images
+
+    
+    def preprocess_txt(self, caption):
+        caption = [clip.tokenize(c, context_length=77) for c in caption]
+        caption = torch.stack(caption).to(self.device)
+        caption = caption.squeeze(1)
+        return caption
+
+    
+    def get_img_emb(self, image_paths):
+        """Get image embedding for CheXZero."""
+        images = self.preprocess_img(image_paths)
+        img_embedding = self.model.encode_image(images)
+        return img_embedding
+    
+
+    def get_txt_emb(self, caption):
+        """Get text embedding for CheXZero."""
+        caption = self.preprocess_txt(caption)
+        txt_embedding = self.model.encode_text(caption)
+        return txt_embedding
+
+    
+    def predict(self, image_paths, caption):
+        # Preprocess
+        images = self.preprocess_img(image_paths)
+        caption = self.preprocess_txt(caption)        
+
+        # Run model
+        logits_per_image, logits_per_text = self.model(images, caption)
+        return logits_per_image, logits_per_text
+
 
 class UnitTest:
     """Unit test for model.py.
@@ -600,15 +665,28 @@ class UnitTest:
         bmc = myBiomedCLIP(ckpt_file="./initial_experiments/ckpts/biomedclip.pth")
 
 
+    def test_chexzero_predict(self):
+        # Load model
+        chexzero = myCheXzero()
+
+        # Generate embedding
+        logits_per_image, logits_per_text = chexzero.predict(self.img_path, self.text)
+        print(logits_per_image.shape, logits_per_text.shape)
+        print("Test chexzero predict: SUCCESS!")
+
+
+
 if __name__ == "__main__":
     unit_test = UnitTest()
 
-    unit_test.test_grounding_dino()
-    unit_test.test_grounding_dino_predict()
-    unit_test.test_grounding_dino_save()
+    # unit_test.test_grounding_dino()
+    # unit_test.test_grounding_dino_predict()
+    # unit_test.test_grounding_dino_save()
 
     # unit_test.test_biomed_clip()
     # # unit_test.test_biomed_clip_save()
 
     # unit_test.test_sam()
     # unit_test.test_sam_save()
+
+    unit_test.test_chexzero_predict()

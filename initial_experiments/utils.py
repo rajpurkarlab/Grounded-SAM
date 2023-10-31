@@ -67,6 +67,7 @@ PROMPTS = { # Baseline prompts
     "Fracture": "Findings suggesting a fracture",
 }
 
+
 def get_iou(pred_mask, gt_mask):
     intersection = np.logical_and(pred_mask, gt_mask)
     union = np.logical_or(pred_mask, gt_mask)

@@ -83,8 +83,8 @@ def train(hyperparams):
     # Load model
     my_groundingdino = myGroundingDino(
         config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
-        ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
-        # ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth",
+        # ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
+        ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth",
         img_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
         txt_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
         device=device,
@@ -115,7 +115,7 @@ def train(hyperparams):
         optimizer = torch.optim.Adam(groundingdino_params, lr=lr)    
 
     # Load scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, eta_min=5e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=1, eta_min=5e-5)
     
     # Training loop
     for epoch in range(num_epochs):
@@ -128,13 +128,16 @@ def train(hyperparams):
             reports = data["report"]
 
             # Compute loss
-            # loss_adaptation, groundingdino_img_loss, groundingdino_txt_loss, sam_img_loss = compute_adaptation_loss(
-            #     image_paths, reports, my_groundingdino, my_biomedclip, my_sam
-            # )
-            loss_medical = compute_medical_loss(image_paths, reports, my_groundingdino)
+            loss_adaptation, groundingdino_img_loss, groundingdino_txt_loss, sam_img_loss = compute_adaptation_loss(
+                image_paths, reports, my_groundingdino, my_biomedclip, my_sam
+            )
+            loss_adaptation, groundingdino_img_loss, groundingdino_txt_loss, sam_img_loss, loss_medical = compute_adaptation_loss(
+                image_paths, reports, my_groundingdino, my_biomedclip, my_sam, classification_loss=True
+            )
+            # loss_medical = compute_medical_loss(image_paths, reports, my_groundingdino)
             loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
             # loss = loss_adaptation + loss_ratio * loss_detection
-            loss = loss_medical + loss_ratio * loss_detection
+            loss = loss_adaptation + 2 * loss_medical + loss_ratio * loss_detection
             
             # Log to wandb
             if log_to_wandb:
@@ -142,9 +145,9 @@ def train(hyperparams):
                         "train/loss": loss,
                         "train/loss_medical": loss_medical,
                         "train/loss_detection": loss_detection,
-                        # "train/loss_adaptation": loss_adaptation,
-                        # "train/groundingdino_img_loss": groundingdino_img_loss,
-                        # "train/groundingdino_txt_loss": groundingdino_txt_loss,
+                        "train/loss_adaptation": loss_adaptation,
+                        "train/groundingdino_img_loss": groundingdino_img_loss,
+                        "train/groundingdino_txt_loss": groundingdino_txt_loss,
                         "train/learning_rate": scheduler.get_last_lr()[0],
                     })
             
@@ -169,14 +172,13 @@ def train(hyperparams):
                     )
 
                 # Evaluation
-                iou_pascal = eval_results("pascal", "grounded-sam", f"./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_{i}.pth")
-                iou_chex = eval_results("chexlocalize", "grounded-sam", f"./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_{i}.pth")
+                iou_pascal = eval_results("pascal", "grounded-sam", f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_backbone_{i}.pth")
+                iou_chex = eval_results("chexlocalize", "grounded-sam", f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_backbone_{i}.pth")
                 auc_chexpert = eval_results(
-                    dataset = "chexpert", 
-                    model = "grounded-sam",
-                    ckpt_file = f"./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_{i}.pth", 
-                    ckpt_img_linear = f"./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_{i}.pth",
-                    ckpt_txt_linear = f"./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_{i}.pth",
+                    "chexpert", "grounded-sam",
+                    ckpt_file = f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_backbone_{i}.pth", 
+                    ckpt_img_linear = f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_img_linear_{i}.pth",
+                    ckpt_txt_linear = f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_txt_linear_{i}.pth",
                 )
                 if log_to_wandb:
                     wandb.log({
@@ -199,7 +201,7 @@ def inf_data_gen(dataloader):
             yield data
 
 
-def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedclip, my_sam):
+def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedclip, my_sam, classification_loss=False):
     """Compute adaptation loss between grounding dino and biomedclip + between sam and biomedclip.
     
     Loss function: cosine similarity between embeddings if SAM is activated, InfoNCE loss if SAM is not activated.
@@ -228,6 +230,7 @@ def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedcli
     groundingdino_img_loss = loss_fn(groundingdino_img_emb, bmc_img_embedding).mean()
     groundingdino_txt_loss = loss_fn(groundingdino_txt_emb, bmc_txt_embedding).mean()
     # groundingdino_img_txt_loss = loss_fn(groundingdino_img_emb, groundingdino_txt_emb).mean()
+    groundingdino_classification_loss = loss_fn(groundingdino_img_emb, groundingdino_txt_emb).mean()
 
     sam_img_loss = torch.tensor(0.0)
     if my_sam:
@@ -241,6 +244,10 @@ def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biomedcli
         groundingdino_txt_loss = -groundingdino_txt_loss
         groundingdino_img_txt_loss = -groundingdino_img_txt_loss
         sam_img_loss = -sam_img_loss
+    
+    # Return
+    if classification_loss:
+        return (loss, groundingdino_img_loss, groundingdino_txt_loss, sam_img_loss, groundingdino_classification_loss)
     return (loss, groundingdino_img_loss, groundingdino_txt_loss, sam_img_loss)
 
 
@@ -402,13 +409,13 @@ class UnitTest:
             "lr": 5e-4,
             "batch_size_adaptation": 16,
             "batch_size_segmentation": 16,
-            "loss_ratio": 5,
+            "loss_ratio": 8,
             "num_epochs": 3,
-            "num_workers": 4,
+            "num_workers": 8,
             "use_sam": False,
             "save_every": 200,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-            "save_folder": "./initial_experiments/ckpts/",
+            "save_folder": "./initial_experiments/ckpts_2/",
             "log_to_wandb": True,
         }
         train(hyperparams)
