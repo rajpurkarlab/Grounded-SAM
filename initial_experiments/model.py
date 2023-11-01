@@ -26,6 +26,7 @@ from models.GroundingDINO.groundingdino.util.inference import load_model, prepro
 # Load CheXzero
 from models.chexzero import load_chexzero_and_transform
 import models.CheXzero.clip as clip
+from models.biovil import load_biovil_and_transform, remap_to_uint8
 
 from linear_probe import LinearProbe
 
@@ -34,6 +35,7 @@ class myGroundingDino:
     
     def __init__(
         self,
+        d=128,
         config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
         ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
         # ckpt_file="./initial_experiments/ckpts/groundingdino_backbone_5151.pth",
@@ -56,7 +58,7 @@ class myGroundingDino:
         ]
         self.img_linear = LinearProbe(
             groundingdino_input_dims,
-            512,
+            d,
             device,
         )
         if img_linear_ckpt:
@@ -68,7 +70,7 @@ class myGroundingDino:
         ]
         self.txt_linear = LinearProbe(
             groundingdino_txt_dims,
-            512,
+            d,
             device,
         )
         if txt_linear_ckpt:
@@ -278,85 +280,6 @@ class myBiomedCLIP:
         torch.save(self.model.state_dict(), ckpt_folder + ckpt_file)
 
 
-# class mySAM:
-
-#     def __init__(
-#         self,
-#         model_name="vit_l",
-#         ckpt_file="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
-#         img_linear_ckpt=None,
-#         device="cuda",
-#     ):
-#         # Load Grounded SAM
-#         self.model = sam_model_registry[model_name](checkpoint=ckpt_file)
-#         print(self.model.image_encoder.img_size)
-#         raise NameError()
-#         self.model.to(device)
-#         self.device = device
-
-#         # Load linear probe for SAM image embedding
-#         sam_input_dims = [
-#             [1, 256, 64, 64]
-#         ]
-#         self.img_linear = LinearProbe(
-#             sam_input_dims, 
-#             512,
-#             device,
-#         )
-#         if img_linear_ckpt:
-#             self.img_linear.load_state_dict(torch.load(img_linear_ckpt, map_location=device))
-
-
-#     def preprocess_img(self, image_paths):
-#         """Preprocess image for SAM.
-        
-#         Inputs:
-#             - image_paths: list of image paths
-#         """
-        
-#         images = []
-#         for image_path in image_paths:
-#             input_image = Image.open(image_path) 
-#             images.append(input_image)
-
-#         transform = torchvision.transforms.Compose([
-#             torchvision.transforms.Resize((20, 20)),
-#             torchvision.transforms.ToTensor()
-#         ])
-#         input_image_torch = [transform(img).to(self.device) for img in images]
-#         input_image_torch = torch.stack(input_image_torch)
-
-#         x = input_image_torch
-#         pixel_mean = [123.675, 116.28, 103.53]
-#         pixel_std = [58.395, 57.12, 57.375]
-#         x = (x - torch.Tensor(pixel_mean).view(-1, 1, 1).to(self.device)) / torch.Tensor(pixel_std).view(-1, 1, 1).to(self.device)
-#         return x
-
-    
-#     def get_img_emb(self, image_path):
-#         """Get image embedding for SAM"""
-#         sam_img = self.preprocess_img(image_path)
-#         sam_img_embedding = self.model.image_encoder(sam_img)
-#         return sam_img_embedding
-
-
-#     def align_img_emb(self, sam_img_embedding):
-#         """Align image embedding to 512."""
-#         sam_img_embedding = self.img_linear([sam_img_embedding])
-#         return sam_img_embedding
-
-
-#     def save_model(
-#         self, 
-#         ckpt_folder="./initial_experiments/ckpts/", 
-#         backbone_file="sam.pth",
-#         img_linear_ckpt="sam_img_linear.pth"
-#     ):
-#         """Save SAM backbone and linear probe for image embedding."""
-#         torch.save(self.model.state_dict(), ckpt_folder + backbone_file)
-#         torch.save(self.img_linear.state_dict(), ckpt_folder + img_linear_ckpt)
-
-
 class mySAM:
 
     def __init__(
@@ -508,23 +431,41 @@ class myCheXzero:
             self.model.load_state_dict(torch.load(ckpt_file, map_location=device))
 
     
-    def preprocess_img(self, image_paths):
+    def preprocess_img(self, image_paths, desired_size=224):
         # Preprocess images
         images = []
         for image_path in image_paths:
-            img = Image.open(image_path).convert("RGB")
-            img = self.preprocess_image(img).to(self.device)
+            img = cv2.imread(str(image_path))
+            # convert to PIL Image object
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(img)
+            # preprocess
+            # img = preprocess(img_pil, desired_size=resolution)  
+            
+            old_size = img.size
+            # prcint(old_size)
+            ratio = float(desired_size)/max(old_size)
+            new_size = tuple([int(x*ratio) for x in old_size])
+            img = img.resize(new_size, Image.LANCZOS)
+            # create a new image and paste the resized on it
+
+            new_img = Image.new('L', (desired_size, desired_size))
+            new_img.paste(img, ((desired_size-new_size[0])//2,
+                                (desired_size-new_size[1])//2))
+            
+            img = new_img
+            
+            img = img.convert("RGB")
+            # img = self.preprocess_image(img).to(self.device)
+            img = torchvision.transforms.ToTensor()(img).to(self.device)
             images.append(img)
         images = torch.stack(images)
         return images
 
     
     def preprocess_txt(self, caption):
-        caption = [clip.tokenize(c, context_length=77) for c in caption]
-        caption = torch.stack(caption).to(self.device)
-        caption = caption.squeeze(1)
-        return caption
-
+        return clip.tokenize(caption, context_length=77).to(self.device)
+    
     
     def get_img_emb(self, image_paths):
         """Get image embedding for CheXZero."""
@@ -537,6 +478,7 @@ class myCheXzero:
         """Get text embedding for CheXZero."""
         caption = self.preprocess_txt(caption)
         txt_embedding = self.model.encode_text(caption)
+        # txt_embedding = txt_embedding / txt_embedding.norm(dim=-1, keepdim=True)
         return txt_embedding
 
     
@@ -548,6 +490,61 @@ class myCheXzero:
         # Run model
         logits_per_image, logits_per_text = self.model(images, caption)
         return logits_per_image, logits_per_text
+
+
+class myBioViL:
+    
+    def __init__(
+        self,
+        ckpt_file=None,
+        device="cuda",
+    ):
+        """BioViL - model(image encoder, text encoder).
+        """
+        # Load CheXZero
+        self.model, self.transform = load_biovil_and_transform(ckpt_file)
+        self.model.to(device)
+        self.device = device
+
+        # Load checkpoint
+        if ckpt_file:
+            self.model.load_state_dict(torch.load(ckpt_file, map_location=device))
+
+    
+    def preprocess_img(self, image_paths):
+        # Preprocess images
+        images = []
+        for image_path in image_paths:
+            img = Image.open(image_path).convert("RGB")
+            img = np.array(img)
+            img = remap_to_uint8(img)
+            img = Image.fromarray(img).convert("L")
+            img = self.transform(img).to(self.device)
+            images.append(img)
+        images = torch.stack(images)
+        return images
+
+    
+    def get_local_img_emb(self, image_paths):
+        """Get localized image embedding for BioViL."""
+        images = self.preprocess_img(image_paths)
+        img_embedding = self.model.image_inference_engine.get_patchwise_projected_embeddings(
+            images, normalize=True
+        )
+        return img_embedding
+    
+    
+    def get_img_emb(self, image_paths):
+        """Get global image embedding for BioViL."""
+        img_embedding = self.get_local_img_emb(image_paths)
+        img_embedding = torch.mean(img_embedding, dim=(1,2))
+        return img_embedding
+    
+
+    def get_txt_emb(self, texts):
+        """Get text embedding for BioViL."""
+        txt_embedding = self.model.text_inference_engine.get_embeddings_from_prompt(texts)
+        return txt_embedding
 
 
 class UnitTest:
@@ -645,7 +642,7 @@ class UnitTest:
 
     def test_biomed_clip(self):
         # Load model
-        bmc = myBiomedCLIP()
+        bmc = myBiomedCLIP(device=self.device)
         
         # Generate embedding
         bmc_img_embedding = bmc.get_img_emb(self.img_path)
@@ -675,18 +672,35 @@ class UnitTest:
         print("Test chexzero predict: SUCCESS!")
 
 
+    def test_biovil(self):
+        # Load model
+        biovil = myBioViL()
+
+        # Generate embedding
+        img_embedding = biovil.get_img_emb(self.img_path)
+        txt_embedding = biovil.get_txt_emb(self.text)
+        print(img_embedding.shape, txt_embedding.shape)
+        print("Test chexzero predict: SUCCESS!")
+
 
 if __name__ == "__main__":
     unit_test = UnitTest()
-
+    
+    # # Grounding DINO
     # unit_test.test_grounding_dino()
     # unit_test.test_grounding_dino_predict()
     # unit_test.test_grounding_dino_save()
 
+    # # Biomed CLIP
     # unit_test.test_biomed_clip()
-    # # unit_test.test_biomed_clip_save()
+    # unit_test.test_biomed_clip_save()
 
+    # # SAM
     # unit_test.test_sam()
     # unit_test.test_sam_save()
 
-    unit_test.test_chexzero_predict()
+    # # CheXZero
+    # unit_test.test_chexzero_predict()
+
+    # BioViL
+    unit_test.test_biovil()

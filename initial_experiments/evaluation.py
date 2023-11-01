@@ -33,7 +33,7 @@ from models.grounded_sam import run_grounded_sam, env_setup, load_models
 from models.baselines import run_biovil
 from segment_anything import build_sam_vit_h, build_sam_vit_l, SamPredictor
 
-from model import myGroundingDino, myBiomedCLIP, mySAM, myCheXzero
+from model import myGroundingDino, myBiomedCLIP, mySAM, myCheXzero, myBioViL
 
 
 def eval_results(
@@ -74,6 +74,7 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
         env_setup()
         print(ckpt_file)
         groundingdino = myGroundingDino(
+            d=512,
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             ckpt_file=ckpt_file,
         )
@@ -184,6 +185,7 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
         env_setup()
         
         groundingdino = myGroundingDino(
+            d=512,
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             ckpt_file=ckpt_file,
         )
@@ -273,6 +275,7 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
     env_setup()
     if model_name == "grounded-sam":
         model = myGroundingDino(
+            d=512,
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             ckpt_file=ckpt_file,
             img_linear_ckpt=ckpt_img_linear,
@@ -282,10 +285,14 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
         model = myBiomedCLIP()
     elif model_name == "chexzero":
         model = myCheXzero()
+    elif model_name == "biovil":
+        model = myBioViL()
+    else:
+        raise NameError(f"Model {model_name} not supported")
 
     # Load CheXlocalize test set
     df = pd.read_csv("datasets/chexlocalize/CheXpert/test_labels.csv")
-    classes = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Pleural Effusion", "No Finding"]
+    classes = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Pleural Effusion"]
     gt_results = {prompt: [] for prompt in classes}
     pred_results = {prompt: [] for prompt in classes}
 
@@ -299,7 +306,7 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
         txt_embedding = model.get_txt_emb([text_prompt])
         if model_name == "grounded-sam":
             txt_embedding = model.align_txt_emb(txt_embedding)
-            txt_embedding = txt_embedding / txt_embedding.norm(dim=-1, keepdim=True)
+        txt_embedding = txt_embedding / txt_embedding.norm(dim=-1, keepdim=True)
         txt_embeddings[query] = txt_embedding
 
         # Negative prompt
@@ -308,7 +315,7 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
         neg_txt_embedding = model.get_txt_emb([neg_text_prompt])
         if model_name == "grounded-sam":
             neg_txt_embedding = model.align_txt_emb(neg_txt_embedding)
-            neg_txt_embedding = neg_txt_embedding / neg_txt_embedding.norm(dim=-1, keepdim=True)
+        neg_txt_embedding = neg_txt_embedding / neg_txt_embedding.norm(dim=-1, keepdim=True)
         neg_txt_embeddings[query] = neg_txt_embedding
     
     # Loop through all test samples (pathology, image, ground-truth mask) tuples
@@ -331,10 +338,19 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
             gt_label = row[query]
 
             # Get predictions
-            pos_score = torch.matmul(img_embedding, txt_embeddings[query].T)
-            neg_score = torch.matmul(img_embedding, neg_txt_embeddings[query].T)
-            inner_product = torch.cat([pos_score, neg_score], dim=1)
-            prob = F.softmax(inner_product * 0.07, dim=1)[:,0].item()
+            pos_logits = img_embedding @ txt_embeddings[query].T # (1, num_classes)
+            pos_logits = np.squeeze(pos_logits.detach().cpu().numpy(), axis=0)
+            
+            neg_logits = img_embedding @ neg_txt_embeddings[query].T # (1, num_classes)
+            neg_logits = np.squeeze(neg_logits.detach().cpu().numpy(), axis=0)
+            
+            sum_pred = np.exp(pos_logits) + np.exp(neg_logits)
+            prob = np.exp(pos_logits) / sum_pred
+            
+            # pos_score = torch.matmul(img_embedding, txt_embeddings[query].T).detach().cpu()
+            # neg_score = torch.matmul(img_embedding, neg_txt_embeddings[query].T).detach().cpu()
+            # inner_product = torch.cat([pos_score, neg_score], dim=1)
+            # prob = F.softmax(inner_product, dim=1)[:,0].item()
 
             # Append to results
             gt_results[query].append(gt_label)
@@ -387,14 +403,14 @@ class UnitTest:
         # print("Starting BioViL, PASCAL, GRADCAM=True...")
         # print("BioViL, PASCAL, GRADCAM=True: ", eval_results("pascal", "biovil", GRADCAM=True))
 
-        # print("Starting Grounded-SAM, CheXpert...")
-        # print("Grounded-SAM, CheXpert: ", eval_results(
-        #     dataset = "chexpert", 
-        #     model = "grounded-sam",
-        #     # ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth", 
-        #     # ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
-        #     # ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
-        # ))
+        print("Starting Grounded-SAM, CheXpert...")
+        print("Grounded-SAM, CheXpert: ", eval_results(
+            dataset = "chexpert", 
+            model = "grounded-sam",
+            ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth", 
+            ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
+            ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
+        ))
 
         # print("Starting BiomedCLIP, CheXpert...")
         # print("BiomedCLIP, CheXpert: ", eval_results(
@@ -402,11 +418,18 @@ class UnitTest:
         #     model = "biomed-clip",
         # ))
 
-        print("Starting CheXzero, CheXpert...")
-        print("CheXzero, CheXpert: ", eval_results(
-            dataset = "chexpert", 
-            model = "chexzero",
-        ))
+        # print("Starting CheXzero, CheXpert...")
+        # print("CheXzero, CheXpert: ", eval_results(
+        #     dataset = "chexpert", 
+        #     model = "chexzero",
+        # ))
+
+        # print("Starting BioViL, CheXpert...")
+        # print("BioViL, CheXpert: ", eval_results(
+        #     dataset = "chexpert", 
+        #     model = "biovil",
+        # ))
+
 
 
 def displace_results():
@@ -416,14 +439,18 @@ def displace_results():
 
     # Load results
     groundingdino_baseline = json.load(open('./chexpert_grounding_dino_baseline_1020.json'))
-    groundingdino_190k = json.load(open('./chexpert_grounding_dino_190k_1020.json'))
+    groundingdino_190k = json.load(open('./chexpert_grounding_dino_19k_1020.json'))
     biomedclip_baseline = json.load(open('./chexpert_biomed_clip_baseline.json'))
+    biovil_baseline = json.load(open('./chexpert_biovil_baseline.json'))
+    chexzero_baseline = json.load(open('./chexpert_chexzero_baseline.json'))
 
     # Display results in a table
     df = pd.DataFrame({
         "BiomedCLIP (baseline)": biomedclip_baseline,
+        "BioViL (baseline)": biovil_baseline,
+        "CheXzero (baseline)": chexzero_baseline,
         "GroundingDINO (baseline)": groundingdino_baseline,
-        "GroundingDINO (190k)": groundingdino_190k,
+        "GroundingDINO (19k)": groundingdino_190k,
     })
     table = tabulate(df, headers='keys', tablefmt='grid')
     title = "AUC results on CheXpert test set"
@@ -432,6 +459,6 @@ def displace_results():
 
 
 if __name__=='__main__':
-    unit_test = UnitTest()
-    unit_test.run_eval_scripts()
-    # displace_results()
+    # unit_test = UnitTest()
+    # unit_test.run_eval_scripts()
+    displace_results()
