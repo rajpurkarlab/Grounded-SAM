@@ -2,6 +2,7 @@
 """
 
 import torch
+import pdb
 
 class LinearProbe(torch.nn.Module):
     """Linear classifier to convert input_emb to the shape of output_emb."""
@@ -21,7 +22,10 @@ class LinearProbe(torch.nn.Module):
 
         # Create linear layer for each input embedding.
         for dims in input_dims:
-            input_dim = dims[-1] * dims[-2]
+            if len(dims) > 3: # for images
+                input_dim = dims[-1] * dims[-2]
+            else: # for text
+                input_dim = dims[-1]
             self.linear_layers.append(
                 torch.nn.Linear(input_dim, output_dim).to(device)
                 )
@@ -47,8 +51,7 @@ class LinearProbe(torch.nn.Module):
         output_emb = []
         for i, layer in enumerate(self.linear_layers):
             emb = input_emb[i]
-            if len(emb.shape) > 3: # average pooling for image [C, H, W], not for text [C, D]
-                emb = torch.mean(emb, dim=(1))
+            emb = torch.mean(emb, dim=(1))
             
             emb = emb.reshape(emb.shape[0], -1)
             out = layer(emb)
