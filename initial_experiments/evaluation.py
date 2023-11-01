@@ -74,7 +74,7 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
         env_setup()
         print(ckpt_file)
         groundingdino = myGroundingDino(
-            d=512,
+            d=128,
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             ckpt_file=ckpt_file,
         )
@@ -185,7 +185,7 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
         env_setup()
         
         groundingdino = myGroundingDino(
-            d=512,
+            d=128,
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             ckpt_file=ckpt_file,
         )
@@ -275,7 +275,7 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
     env_setup()
     if model_name == "grounded-sam":
         model = myGroundingDino(
-            d=512,
+            d=128,
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             ckpt_file=ckpt_file,
             img_linear_ckpt=ckpt_img_linear,

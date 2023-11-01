@@ -46,7 +46,7 @@ if torch.cuda.is_available():
 def train(hyperparams):
     """Train the model."""
     
-    print("BOTH LOSSES\n\n")
+    print("BOTH LOSSES, BIOVIL\n\n")
 
     # Load hyperparameters
     lr = hyperparams['lr']
@@ -58,6 +58,7 @@ def train(hyperparams):
     num_epochs = hyperparams['num_epochs']
     num_workers = hyperparams['num_workers']
     save_every = hyperparams['save_every']
+    log_image_every = hyperparams['log_image_every']
     use_sam = hyperparams['use_sam']
     device = hyperparams['device']
     save_folder = hyperparams['save_folder']
@@ -136,10 +137,15 @@ def train(hyperparams):
             groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss = compute_adaptation_loss(
                 image_paths, reports, my_groundingdino, my_biovil, my_sam,
             )
-            loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
+            
+            if i % log_image_every == 0:
+                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, viz=True, log_to_wandb=log_to_wandb)
+            else:
+                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
+            
             loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss) + lambda_img_txt * groundingdino_img_txt_loss + lambda_detection * loss_detection
 
-            if i % (10) == 0:
+            if i % log_image_every == 0:
                 save_viz(data, my_groundingdino, step=i, log_to_wandb=log_to_wandb)
             
             # Log to wandb
@@ -248,7 +254,7 @@ def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biovil, m
     return (groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss)
 
 
-def compute_detection_loss(data, my_groundingdino, step, viz=False):
+def compute_detection_loss(data, my_groundingdino, step, viz=False, log_to_wandb=False):
     """Compute detection loss."""
     # Load data
     image_paths = data["image_path"]
@@ -274,28 +280,48 @@ def compute_detection_loss(data, my_groundingdino, step, viz=False):
                     best_loss = loss
                     best_box = idx
         total_loss += best_loss
+    
+    if viz:
+        # b = random.randint(0, gt_bboxs.shape[0]-1)
+        b = gt_bboxs.shape[0]-1 # martin changed to ensure the "best_box" is meaningful
+        bbox = pred_bboxs[b]     
+        bbox2 = gt_bboxs[b][best_box]
+        
+        img = cv2.imread(image_paths[b])
+        start_point = (int(bbox[0]), int(bbox[1]))
+        end_point = (int(bbox[2]), int(bbox[3]))
+        cv2.rectangle(img, start_point, end_point, color=(0,0,255), thickness=4) # red for prediction
+        cv2.rectangle(img, (int(bbox2[0]), int(bbox2[1])), (int(bbox2[2]), int(bbox2[3])), color=(0,255,0), thickness=4) # green for gt
+        
+        cv2.imwrite(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg", img)
+        
+        if log_to_wandb:
+            images = wandb.Image(
+                Image.open(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg"), 
+                caption=f"{labels[b]}_step_{step}"
+            )
+                    
+            wandb.log({"pascal_images": images})
             
     return total_loss / gt_bboxs.shape[0]
 
 
 def save_viz(data, my_groundingdino, step, log_to_wandb=False):
-    """Compute detection loss."""
+    """Visualization for MIMIC-CXR."""
     # Load data
     b = random.randint(0, len(data["image_path"])-1)
     image_paths = [data["image_path"][b]]
     labels = [data["report"][b]]
-    for i in range(len(labels)):
-        labels[i] = f"Findings suggest {labels[i]}"
     
     # Predict bounding box
     pred_bboxs, logits = my_groundingdino.predict(image_paths, labels, box_threshold=0.0)
     
     bbox = pred_bboxs[0]
-    
+        
     img = cv2.imread(image_paths[0])
     start_point = (int(bbox[0]), int(bbox[1]))
     end_point = (int(bbox[2]), int(bbox[3]))
-    cv2.rectangle(img, start_point, end_point, color=(0,255,0), thickness=4)
+    cv2.rectangle(img, start_point, end_point, color=(0,0,255), thickness=4)
     
     cv2.imwrite(f"./initial_experiments/images/{labels[0]}_step_{step}.jpg", img)
     
@@ -304,7 +330,7 @@ def save_viz(data, my_groundingdino, step, log_to_wandb=False):
             Image.open(f"./initial_experiments/images/{labels[0]}_step_{step}.jpg"), 
             caption=f"{labels[0]}_step_{step}"
         )
-        wandb.log({"images": images})
+        wandb.log({"chex_images": images})
 
 
 def compute_segmentation_loss(batch, sam_class, my_sam=None):
@@ -396,7 +422,8 @@ class UnitTest:
             "num_epochs": 3,
             "num_workers": 8,
             "use_sam": False,
-            "save_every": 200,
+            "save_every": 10,
+            "log_image_every": 10,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts_2/",
             "log_to_wandb": True,
