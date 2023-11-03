@@ -22,6 +22,7 @@ from models.grounded_sam import *
 from groundingdino.util.misc import nested_tensor_from_tensor_list
 from models.GroundingDINO.groundingdino.models.GroundingDINO.bertwarper import generate_masks_with_special_tokens_and_transfer_map_nocate
 from models.GroundingDINO.groundingdino.util.inference import load_model, preprocess_caption
+from groundingdino.util.utils import get_phrases_from_posmap
 
 # Load CheXzero
 from models.chexzero import load_chexzero_and_transform
@@ -210,6 +211,141 @@ class myGroundingDino:
             boxes = prediction_boxes[mask]  # boxes.shape = (B, 4)
             logits = prediction_logits[mask]  # logits.shape = (B, 256)
             logits = logits.max(dim=1)[0]
+        return boxes, logits
+
+    def inference(
+        self,
+        image_path,
+        caption,
+        box_threshold,
+        text_threshold,
+    ):  
+        """Open-vocabulary phrase grounding using Grounding Dino during inference.
+
+        Args:
+            - image_path: list of string image paths.
+            - caption: list of string captions.
+            - box_threshold: float, threshold for box confidence score.
+            - text_threshold: float, threshold for text confidence score.
+
+        Returns:
+            - boxes: list of predicted bounding boxes.
+                - boxes.length = image_path.length
+                - boxes[i] has shape (n_i, 4).
+                - n_i is different for each boxes[i] due to filtering.
+            - logits: list of predicted text confidence scores.
+            - phrases: list of predicted phrases.
+        """
+        B = len(image_path)
+
+        # Prepare images and text
+        source_image, image = self.preprocess_img(image_path)
+        caption = [preprocess_caption(c) for c in caption]
+
+        # Get prediction
+        outputs = self.model(image, captions=caption)
+        prediction_logits = outputs["pred_logits"].sigmoid()  # prediction_logits.shape = (B, nq, 256), where nq = 900
+        prediction_boxes = outputs["pred_boxes"]  # prediction_boxes.shape = (B, nq, 4)
+
+        # Filter based on box threshold
+        mask = prediction_logits.max(dim=2)[0] > box_threshold # mask.shape = (B, nq)
+        logits, boxes = [], []
+        for b in range(B):
+            logits.append(prediction_logits[b][mask[b]])
+            boxes.append(prediction_boxes[b][mask[b]])
+
+        # Tokenize caption
+        tokenizer = self.model.tokenizer
+        tokenized = tokenizer(caption)
+
+        # Separate tokenized into single samples
+        tokenized_samples = [{} for _ in range(B)]
+        for key, val in tokenized.items():
+            for b in range(B):
+                tokenized_samples[b][key] = val[b]
+
+        # For each bbox, get the token(s) that corresponds to it
+        phrases = []
+        for b in range(B):
+            labels = [
+                get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer).replace('.', '')
+                for logit in logits[b]
+            ]
+            phrases.append(labels)
+    
+        # Resize boxes from [0, 1] to original dimension of the image
+        for b in range(B):
+            h, w, _ = source_image[b].shape
+            boxes[b] = boxes[b] * torch.Tensor([w, h, w, h]).to(self.device)
+            boxes[b] = box_convert(boxes=boxes[b], in_fmt="cxcywh", out_fmt="xyxy")
+
+        # Get max logits to return for each sample i
+        logits = [logit.max(dim=1)[0] for logit in logits]
+
+        return boxes, logits, phrases
+
+
+    def forward(
+        self,
+        image_path,
+        caption,
+    ):  
+        """Open-vocabulary phrase grounding using Grounding Dino during training.
+
+        Achieves the same functionality as inference when setting box_threshold to 0.0.
+        This implement is faster since we know the bboxs of every sample have the same dimension,
+        we can replace tensor operation and
+
+        Args:
+            - image_path: list of string image paths.
+            - caption: list of string captions.
+            - box_threshold: float, threshold for box confidence score.
+            - text_threshold: float, threshold for text confidence score.
+
+        Returns:
+            - boxes: tensor, predicted bounding boxes of shape (B, 900, 4).
+            - logits: tensor, predicted text confidence scores of shape (B, 900, 256).
+            - phrases: tensor, predicted phrases of shape (B, 900).
+        """
+        B = len(image_path)
+
+        # Prepare images and text
+        source_image, image = self.preprocess_img(image_path)
+        caption = [preprocess_caption(c) for c in caption]
+
+        # Get prediction
+        outputs = self.model(image, captions=caption)
+        logits = outputs["pred_logits"].sigmoid()  # prediction_logits.shape = (B, nq, 256), where nq = 900
+        boxes = outputs["pred_boxes"]  # prediction_boxes.shape = (B, nq, 4)
+
+        # Resize boxes from [0, 1] to original dimension of the image
+        for b in range(B):
+            h, w, _ = source_image[b].shape
+            boxes[b] = boxes[b] * torch.Tensor([w, h, w, h]).to(self.device)
+        boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy")
+
+        # # Tokenize caption
+        # tokenizer = self.model.tokenizer
+        # tokenized = tokenizer(caption)
+
+        # # Separate tokenized into single samples
+        # tokenized_samples = [{} for _ in range(B)]
+        # for key, val in tokenized.items():
+        #     for b in range(B):
+        #         tokenized_samples[b][key] = val[b]
+            
+        # # For each bbox, get the token(s) that corresponds to it
+        # phrases = []
+        # for b in range(B):
+        #     labels = [
+        #         get_phrases_from_posmap(logit > 0.1, tokenized_samples[b], tokenizer).replace('.', '')
+        #         for logit in logits[b]
+        #     ]
+        #     phrases.append(labels)
+
+        # Get max logits to return for each sample i
+        logits = logits.max(dim=2)[0]
+
         return boxes, logits
 
 
@@ -590,17 +726,36 @@ class UnitTest:
         # Load model
         grounding_dino = myGroundingDino()
         IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg", "./initial_experiments/toy_data/chest_x_ray.jpeg"]
-        TEXT_PROMPT = ["2 dogs sitting in their kennels", "This is a image a 2 lungs."]
+        TEXT_PROMPT = ["2 dogs . kennels .", "2 lungs ."]
         BOX_TRESHOLD = 0.35
+        TEXT_TRESHOLD = 0.25
 
         # Get predicted bbox
-        boxes, logits = grounding_dino.predict(
+        boxes, logits, phrases = grounding_dino.inference(
             image_path=IMAGE_PATH,
             caption=TEXT_PROMPT,
             box_threshold=BOX_TRESHOLD,
+            text_threshold=TEXT_TRESHOLD,
+        )
+        print(boxes, logits, phrases)
+        print("Test grounding dino predict: SUCCESS!")
+
+
+    def test_grounding_dino_forward(self):
+        # Load model
+        grounding_dino = myGroundingDino()
+        IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg", "./initial_experiments/toy_data/chest_x_ray.jpeg"]
+        TEXT_PROMPT = ["2 dogs . kennels .", "2 lungs ."]
+        BOX_TRESHOLD = 0.35
+        TEXT_TRESHOLD = 0.25
+
+        # Get predicted bbox
+        boxes, logits = grounding_dino.forward(
+            image_path=IMAGE_PATH,
+            caption=TEXT_PROMPT,
         )
         print(boxes, logits)
-        print("Test grounding dino predict: SUCCESS!")
+        print("Test grounding dino forward: SUCCESS!")
 
 
     def test_grounding_dino_save(self):
@@ -617,6 +772,7 @@ class UnitTest:
             txt_linear_ckpt="./initial_experiments/ckpts/groundingdino_txt_linear.pth"
         )
         print("Test grounding dino save: SUCCESS!")
+
     
     def test_sam(self):
         # Load model
@@ -686,9 +842,9 @@ class UnitTest:
 if __name__ == "__main__":
     unit_test = UnitTest()
     
-    # # Grounding DINO
+    # Grounding DINO
     # unit_test.test_grounding_dino()
-    # unit_test.test_grounding_dino_predict()
+    unit_test.test_grounding_dino_forward()
     # unit_test.test_grounding_dino_save()
 
     # # Biomed CLIP
@@ -702,5 +858,5 @@ if __name__ == "__main__":
     # # CheXZero
     # unit_test.test_chexzero_predict()
 
-    # BioViL
-    unit_test.test_biovil()
+    # # BioViL
+    # unit_test.test_biovil()
