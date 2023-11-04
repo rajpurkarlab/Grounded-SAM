@@ -10,11 +10,14 @@ import pdb
 import cv2
 
 import torch
+import pycocotools.mask as mask_util
+import json
 import pandas as pd
 import numpy as np
 import wandb
 from tqdm.auto import tqdm
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
@@ -24,11 +27,12 @@ from PIL import Image
 from transformers import SamProcessor
 from info_nce import InfoNCE
 
-from evaluation import eval_results
+from evaluation_mm import eval_results
+from utils import PROMPTS
 
 from model import myGroundingDino, myBiomedCLIP, mySAM, myBioViL
 from dataset_mimic import load_data as load_mimic
-from dataset_martin_pascal import load_data as load_pascal
+from dataset_pascal import load_data as load_pascal
 
 # seed
 seed_value = 42
@@ -55,6 +59,7 @@ def train(hyperparams):
     lambda_detection = hyperparams['lambda_detection']
     lambda_img_txt = hyperparams['lambda_img_txt']
     lambda_adaptation = hyperparams['lambda_adaptation']
+    lambda_classif = hyperparams['lambda_classif']
     num_epochs = hyperparams['num_epochs']
     num_workers = hyperparams['num_workers']
     save_every = hyperparams['save_every']
@@ -116,16 +121,15 @@ def train(hyperparams):
     groundingdino_params = list(my_groundingdino.model.backbone.parameters()) + list(my_groundingdino.img_linear.parameters()) + list(my_groundingdino.txt_linear.parameters())
     if use_sam:
         sam_params = list(my_sam.model.parameters()) + list(my_sam.img_linear.parameters())
-        optimizer = torch.optim.Adam(groundingdino_params + sam_params, lr=lr)
+        optimizer = torch.optim.AdamW(groundingdino_params + sam_params, lr=lr, weight_decay=1e-4)
     else:
-        optimizer = torch.optim.Adam(groundingdino_params, lr=lr)    
+        optimizer = torch.optim.AdamW(groundingdino_params, lr=lr, weight_decay=1e-4)
 
     # Load scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=19000, T_mult=1, eta_min=2e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=19000, T_mult=1, eta_min=1e-5)
     
     # Training loop
     for epoch in range(num_epochs):
-        
         for i, data in enumerate(tqdm(mimic_dataloader, desc=f'Training @ epoch {epoch+1} of {num_epochs}')):
             optimizer.zero_grad()
 
@@ -143,10 +147,14 @@ def train(hyperparams):
             else:
                 loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
             
-            loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss) + lambda_img_txt * groundingdino_img_txt_loss + lambda_detection * loss_detection
+            # loss_classif = classification_loss(data, my_groundingdino, batch_size_seg)
+            
+            loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss) \
+                          + lambda_img_txt * groundingdino_img_txt_loss + lambda_detection * loss_detection \
+                        #   + lambda_classif * loss_classif
 
             if i % log_image_every == 0:
-                save_viz(data, my_groundingdino, step=i, log_to_wandb=log_to_wandb)
+                save_viz(my_groundingdino, step=i, log_to_wandb=log_to_wandb)
             
             # Log to wandb
             if log_to_wandb:
@@ -254,80 +262,154 @@ def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biovil, m
     return (groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss)
 
 
-def compute_detection_loss(data, my_groundingdino, step, viz=False, log_to_wandb=False):
+def classification_loss(data, my_groundingdino, batch_size):
     """Compute detection loss."""
+    # Load data
+    image_paths = data["image_path"]
+    l = data["labels"]
+        
+    # Predict bounding box
+    loss = 0
+    for b in range(batch_size):
+        pos = []
+        neg = []
+        for key in l:
+            li = l[key].tolist()[b]
+            if np.isnan(li) or li==0.:
+                neg.append(key)
+            elif li==1.:
+                pos.append(key)
+                
+        b_loss = 0
+        # Positive
+        pred_bboxs, logits = my_groundingdino.predict([image_paths[b]], pos+neg, box_threshold=0.0)
+        pdb.set_trace()
+        for c in pos:
+            
+            b_loss += torch.nn.BCEWithLogitsLoss()(logits, torch.tensor([1.]).to(my_groundingdino.device))
+        
+        # Negative
+        for c in neg:
+            pred_bboxs, logits = my_groundingdino.predict([image_paths[b]], [c], box_threshold=0.0)
+            b_loss += torch.nn.BCEWithLogitsLoss()(logits, torch.tensor([0.]).to(my_groundingdino.device))
+        
+        loss += b_loss / len(pos+neg)
+    
+    return loss
+
+
+def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.5, viz=False, log_to_wandb=False):
+    """Compute detection loss."""
+    # Define loss function
+    obj_loss_fn = nn.BCEWithLogitsLoss(reduction="none")
+    l1_loss_fn = nn.L1Loss(reduction="none")
+
     # Load data
     image_paths = data["image_path"]
     labels = data["label"]
     for i in range(len(labels)):
-        labels[i] = f"An image of a {labels[i]}"
+        labels[i] = f"{labels[i]}"
     gt_bboxs = data["bbox"].to(my_groundingdino.device)
     
     # Predict bounding box
-    pred_bboxs, logits = my_groundingdino.predict(image_paths, labels, box_threshold=0.0)
-    
+    pred_bboxs, logits = my_groundingdino.forward(image_paths, labels)
+
+    # Compute loss
     total_loss = 0
-    for b in range(gt_bboxs.shape[0]):
-        best_loss = np.inf
-        best_box = -1
-        bboxs = gt_bboxs[b]
-        
-        # Find gt bbox with the highest IoU (i.e., smallest loss) with prediction
-        for idx, box in enumerate(bboxs):
-            if (box != -1).any():
-                loss = ops.generalized_box_iou_loss(box, pred_bboxs[b], reduction="mean")
-                if loss < best_loss:
-                    best_loss = loss
-                    best_box = idx
-        total_loss += best_loss
+    B = gt_bboxs.shape[0]
+    for b in range(B):
+        # Filter for valid gt bboxs
+        gt_bboxs_target = gt_bboxs[b][gt_bboxs[b][:, 0] != -1]
+
+        # Compute IoU between each pred_bbox and each gt_bbox
+        ious = ops.box_iou(pred_bboxs[b], gt_bboxs_target)
+        ious, gt_indices = ious.max(dim=1) # max iou overlap for each predicted bbox
+
+        # Compute binary classification loss
+        gt_label = ious > iou_thres
+        obj_loss = obj_loss_fn(logits[b], gt_label.float())
+
+        # Comput regression loss
+        gt_bboxs_target = gt_bboxs_target[gt_indices]
+        giou_loss = ops.generalized_box_iou_loss(gt_bboxs_target, pred_bboxs[b], reduction="none")
+        # l1_loss = l1_loss_fn(gt_bboxs_target, pred_bboxs[b]).sum(dim=1)
+        reg_loss = gt_label.float() * giou_loss # only compute loss for positive predictions
+
+        # Compute total loss
+        total_loss += obj_loss.mean() + reg_loss.mean()
     
     if viz:
-        # b = random.randint(0, gt_bboxs.shape[0]-1)
-        b = gt_bboxs.shape[0]-1 # martin changed to ensure the "best_box" is meaningful
-        bbox = pred_bboxs[b]     
-        bbox2 = gt_bboxs[b][best_box]
+        # Get prediction with highest IoU for the last sample
+        b = B - 1
+        best_iou, best_idx = ious.max(dim=0)
+        bbox = pred_bboxs[b][best_idx]   
+        bbox2 = gt_bboxs_target[best_idx]
         
+        # Draw on image
         img = cv2.imread(image_paths[b])
         start_point = (int(bbox[0]), int(bbox[1]))
         end_point = (int(bbox[2]), int(bbox[3]))
         cv2.rectangle(img, start_point, end_point, color=(0,0,255), thickness=4) # red for prediction
         cv2.rectangle(img, (int(bbox2[0]), int(bbox2[1])), (int(bbox2[2]), int(bbox2[3])), color=(0,255,0), thickness=4) # green for gt
         
+        # Save and log
         cv2.imwrite(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg", img)
-        
         if log_to_wandb:
             images = wandb.Image(
                 Image.open(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg"), 
                 caption=f"{labels[b]}_step_{step}"
             )
-                    
             wandb.log({"pascal_images": images})
-            
-    return total_loss / gt_bboxs.shape[0]
+
+    return total_loss / B
 
 
-def save_viz(data, my_groundingdino, step, log_to_wandb=False):
-    """Visualization for MIMIC-CXR."""
-    # Load data
-    b = random.randint(0, len(data["image_path"])-1)
-    image_paths = [data["image_path"][b]]
-    labels = [data["report"][b]]
+
+def save_viz(my_groundingdino, step, log_to_wandb=False):
+    """Visualization for CheXlocalize."""
+    # Randomly choose an image
+    json_obj = json.load(open("datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"))
+    b = random.randint(0, len(json_obj)-1)
+    obj = list(json_obj.keys())[b]
+    filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
+    image_paths = [filename]
+    
+    # Choose a disease
+    for query in json_obj[obj]:
+        annots = json_obj[obj][query]
+        if annots['counts'] != 'ifdl3': # ifdl3 denotes an empty ground-truth mask; skip over these test samples
+            mask = mask_util.decode(annots)
+            if mask.max() > 0: 
+                break
+     
+    # labels = [PROMPTS[query]]
+    labels = [query]
     
     # Predict bounding box
     pred_bboxs, logits = my_groundingdino.predict(image_paths, labels, box_threshold=0.0)
-    
     bbox = pred_bboxs[0]
-        
+
+    # Draw predicted bbox
     img = cv2.imread(image_paths[0])
     start_point = (int(bbox[0]), int(bbox[1]))
     end_point = (int(bbox[2]), int(bbox[3]))
     cv2.rectangle(img, start_point, end_point, color=(0,0,255), thickness=4)
     
-    cv2.imwrite(f"./initial_experiments/images/{labels[0]}_step_{step}.jpg", img)
+    # Draw ground-truth mask
+    color = (0,255,0)
+    alpha = 0.3
+    color = color[::-1]
+    colored_mask = np.expand_dims(mask, 0).repeat(3, axis=0)
+    colored_mask = np.moveaxis(colored_mask, 0, -1)
+    masked = np.ma.MaskedArray(img, mask=colored_mask, fill_value=color)
+    image_overlay = masked.filled()
+    image_combined = cv2.addWeighted(img, 1 - alpha, image_overlay, alpha, 0)
     
+    # Save and log
+    cv2.imwrite(f"./initial_experiments/images/{query}_step_{step}.jpg", image_combined)
     if log_to_wandb:
         images = wandb.Image(
-            Image.open(f"./initial_experiments/images/{labels[0]}_step_{step}.jpg"), 
+            Image.open(f"./initial_experiments/images/{query}_step_{step}.jpg"), 
             caption=f"{labels[0]}_step_{step}"
         )
         wandb.log({"chex_images": images})
@@ -413,17 +495,18 @@ class UnitTest:
     
     def run_training(self):
         hyperparams = {
-            "lr": 2e-4,
+            "lr": 1e-4,
             "batch_size_adaptation": 16,
             "batch_size_segmentation": 16,
             "lambda_detection": 8,
             "lambda_img_txt": 2,
             "lambda_adaptation": 1,
+            "lambda_classif": 1,
             "num_epochs": 3,
-            "num_workers": 8,
+            "num_workers": 4,
             "use_sam": False,
-            "save_every": 10,
-            "log_image_every": 10,
+            "save_every": 200,
+            "log_image_every": 20,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts_2/",
             "log_to_wandb": True,
