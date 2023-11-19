@@ -16,6 +16,7 @@ import open_clip
 from segment_anything.utils.transforms import ResizeLongestSide
 from segment_anything import sam_model_registry, build_sam, SamPredictor
 from segment_anything.modeling import ImageEncoderViT, MaskDecoder, PromptEncoder, Sam, TwoWayTransformer
+import bisect
 
 # Grounded sam
 from models.grounded_sam import *
@@ -171,7 +172,7 @@ class myGroundingDino:
         return groundingdino_txt_embedding
     
 
-    def predict(self, image_path, caption: str, box_threshold: float, gt_boxes=None, k=10):  
+    def predict(self, image_path, caption, box_threshold: float, gt_boxes=None, k=10, text_threshold = 0.25):  
         """Get predicted bounding box and confidence score for Grounding Dino.
 
         box_threshold is currently not used, as the box with the highest threshold is always selected.
@@ -207,11 +208,74 @@ class myGroundingDino:
             logits = logits.max(dim=2)[0]
         else:
             # Filter for the highest confidence box
-            mask = prediction_logits.max(dim=2)[0] == prediction_logits.max(dim=2)[0].max(dim=1)[0].unsqueeze(1) # mask.shape = (B, n)
-            boxes = prediction_boxes[mask]  # boxes.shape = (B, 4)
-            logits = prediction_logits[mask]  # logits.shape = (B, 256)
-            logits = logits.max(dim=1)[0]
-        return boxes, logits
+            # mask = prediction_logits.max(dim=2)[0] == prediction_logits.max(dim=2)[0].max(dim=1)[0].unsqueeze(1) # mask.shape = (B, n)
+           
+            mask = prediction_logits.max(dim=2)[0] > 0.0
+            # pdb.set_trace()
+            # raise Exception()
+            
+        
+            boxes = prediction_boxes # [mask]  # boxes.shape = (B, 4)
+            logits = prediction_logits # [mask]  # logits.shape = (B, 256)
+            print(B, boxes.shape, logits.shape)
+            # logits = logits.max(dim=1)[0]
+            # print(B, boxes.shape, logits.shape)
+            # raise Exception()
+
+        # Tokenize caption
+        tokenizer = self.model.tokenizer
+        tokenized = tokenizer(caption)
+
+        # Separate tokenized into single samples
+        tokenized_samples = [{} for _ in range(B)]
+        for key, val in tokenized.items():
+            for b in range(B):
+                tokenized_samples[b][key] = val[b]
+                
+        if True:
+            PHRASES = []
+            for b in range(B):
+                sep_idx = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
+                
+                phrases = []
+                for logit in logits[b]:
+                    max_idx = logit.argmax()
+                    insert_idx = bisect.bisect_left(sep_idx, max_idx)
+                    right_idx = sep_idx[insert_idx]
+                    left_idx = sep_idx[insert_idx - 1]
+                    phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
+                PHRASES.append(phrases)
+        # pdb.set_trace()
+        
+        new_boxes = []
+        new_logits = []
+        for b in range(B):
+            phrases = [string for index, string in enumerate(PHRASES[b]) if string != ""]
+            f = [index for index, string in enumerate(PHRASES[b]) if string != ""]
+            # pdb.set_trace()
+            # new_boxes.append(boxes[b][f])
+            # new_logits.append(logits[b][f])
+            PHRASES[b] = phrases
+            try:
+                mask = logits[b][f].max(dim=1)[0] == logits[b][f].max(dim=1)[0].max(dim=0)[0] # mask.shape = (B, n)
+                new_boxes.append(boxes[b][f][mask])
+                new_logits.append(logits[b][f][mask])
+            except:
+                new_boxes.append(torch.zeros((1,4)))
+                new_logits.append(torch.zeros((1,256)))
+            # pdb.set_trace()
+        
+        boxes = torch.stack(new_boxes)
+        logits = torch.stack(new_logits)
+        # print(boxes.shape)
+        
+        # boxes= boxes[mask]
+        # logits=logits[mask]
+        logits = logits.max(dim=1)[0]
+        
+        # pdb.set_trace()
+        
+        return boxes, logits, PHRASES
 
     def inference(
         self,
@@ -265,13 +329,28 @@ class myGroundingDino:
                 tokenized_samples[b][key] = val[b]
 
         # For each bbox, get the token(s) that corresponds to it
-        phrases = []
-        for b in range(B):
-            labels = [
-                get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer).replace('.', '')
-                for logit in logits[b]
-            ]
+        if True:
+            phrases = []
+            for b in range(B):
+                sep_idx = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
+                
+                labels = []
+                for logit in logits[b]:
+                    max_idx = logit.argmax()
+                    insert_idx = bisect.bisect_left(sep_idx, max_idx)
+                    right_idx = sep_idx[insert_idx]
+                    left_idx = sep_idx[insert_idx - 1]
+                    labels.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
             phrases.append(labels)
+        else:
+            phrases = []
+            for b in range(B):
+                labels = [
+                    get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer).replace('.', '')
+                    for logit in logits[b]
+                ]
+                phrases.append(labels)
+        
     
         # Resize boxes from [0, 1] to original dimension of the image
         for b in range(B):
@@ -679,6 +758,8 @@ class myBioViL:
 
     def get_txt_emb(self, texts):
         """Get text embedding for BioViL."""
+        max_length = 500
+        texts = [text[:max_length] for text in texts]
         txt_embedding = self.model.text_inference_engine.get_embeddings_from_prompt(texts)
         return txt_embedding
 

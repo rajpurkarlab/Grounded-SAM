@@ -98,68 +98,50 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
         # load ground truth
         gt_path = gt_folder_path + '/' + id + '.png'
         gt_masks = get_queries(gt_path, Image.open(img_path).size)
+        
+        keys = list(gt_masks.keys())
+        prompt = ""
+        for key in keys:
+            prompt += key + " . "
+        prompt = prompt.strip()
+        
+        BOX_TRESHOLD = 0.35
+        TEXT_TRESHOLD = 0.25
 
-        # run through all classes
-        for class_name in class_names:
-            if class_name not in gt_masks:
-                continue
-
-            # load gt mask
-            gt_mask = gt_masks[class_name]
-
-            # run grounded sam
-            text_prompt = 'a ' + class_name
-
+        # Get predicted bbox
+        boxes, logits, phrases = groundingdino.inference(
+            image_path=[img_path],
+            caption=[prompt],
+            box_threshold=BOX_TRESHOLD,
+            text_threshold=TEXT_TRESHOLD,
+        )
+        
+        try:
+            phrases = [phrase[0] for phrase in phrases]
+        except:
+            phrases = []
+        
+        boxes=boxes[0]
+        
+        for i, phrase in enumerate(phrases):
+            gt_mask = gt_masks[phrase]
+            
+            bbox = boxes[i].type(torch.int64)
+            pred_mask = np.zeros_like(gt_mask)
+            pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1 
+            pred_mask = (pred_mask != 0).astype(int)
+            
             try:
-                if model == "grounded-sam":
-                    if use_sam:
-                        pred_mask = run_grounded_sam(img_path, text_prompt, groundingdino_model, sam_predictor)
-                    else:
-                        bbox, logits = groundingdino.predict([img_path], [text_prompt], box_threshold=0.0)
-                        # bbox = bbox[0].detach().numpy().astype(int)
-                        bbox = bbox[0].type(torch.int64)
-                        pred_mask = np.zeros_like(gt_mask)
-                        pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1 
-                        
-                        # import cv2
-                        # # from torchvision.ops import box_convert
-                        # # xyxy = box_convert(boxes=[bbox], in_fmt="cxcywh", out_fmt="xyxy").numpy()
-                        # # print(xyxy)
-                        
-                        # print(text_prompt)
-                        
-                        # img = cv2.imread(img_path)
-                        # start_point = (int(bbox[0]), int(bbox[1]))
-                        # end_point = (int(bbox[2]), int(bbox[3]))
-                        # cv2.rectangle(img, start_point, end_point, color=(0,255,0), thickness=4)
-                        
-                        # cv2.imwrite("example_with_bounding_boxes.jpg", img)
-                        
-                        
-                        # plt.imsave('pred_mask.png', np.array(pred_mask), cmap=cm.gray)
-                        # print("Done.")
-                        # exit(0)
-                    
-                elif model == "biovil":
-                    if GRADCAM:
-                        pred_mask = run_biovil(img_path, text_prompt, gradcam=True)
-                    else:
-                        pred_mask = run_biovil(img_path, text_prompt)
-                else:
-                    raise NotImplementedError(f"Model {model} not supported")   
-                
-                pred_mask = (pred_mask != 0).astype(int)
-
-                # compute iou
-                try:
-                    iou_score = get_iou(pred_mask, gt_mask)
-                except:
-                    iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
-                
-                iou_results[class_name].append(iou_score)
-                # print(iou_score)
+                iou_score = get_iou(pred_mask, gt_mask)
             except:
-                print(f"\nSkipping {img_path}, {text_prompt} due to errors\n")
+                iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
+            
+            iou_results[phrase].append(iou_score)
+            
+        for phrase in list(set(keys)-set(phrases)):
+            gt_mask = gt_masks[phrase]
+            iou_score = get_iou(np.zeros_like(gt_mask), gt_mask)
+            iou_results[phrase].append(iou_score)
 
     # compute average mIoU across all classes
     total_sum = 0
@@ -190,8 +172,6 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
             ckpt_file=ckpt_file,
         )
         
-        groundingdino_model = groundingdino.model
-
         if use_sam:
             sam = build_sam_vit_l(
                 checkpoint="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
@@ -212,44 +192,73 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
         filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
         
         # Loop through all pathologies in a test sample
-        for query in json_obj[obj]:
-            if query not in PROMPTS:
-                continue
-            annots = json_obj[obj][query]
-
-            if annots['counts'] != 'ifdl3': # ifdl3 denotes an empty ground-truth mask; skip over these test samples
-                gt_mask = mask_util.decode(annots) # Decode ground-truth mask using pycocotools library
-                if gt_mask.max() == 0:
-                    continue
-
-                # Get predicted mask
-                text_prompt = PROMPTS[query]
-                if model == "grounded-sam":
-                    if use_sam:
-                        pred_mask = run_grounded_sam(filename, text_prompt, groundingdino_model, sam_predictor)
-                    else:
-                        bbox, logits = groundingdino.predict([filename], [text_prompt], box_threshold=0.0)
-                        # bbox = bbox[0].detach().numpy().astype(int)
-                        bbox = bbox[0].type(torch.int64)
-                        pred_mask = np.zeros_like(gt_mask)
-                        pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1
-                elif model == "biovil":
-                    if GRADCAM:
-                        pred_mask = run_biovil(filename, text_prompt, gradcam=True)
-                    else:
-                        pred_mask = run_biovil(filename, text_prompt)
-                else:
-                    raise NotImplementedError(f"Model {model} not supported")        
+        keys = list(json_obj[obj].keys())
+        keys_to_remove = []
+        for i, key in enumerate(keys):
+            if key not in PROMPTS or json_obj[obj][key] == 'ifdl3':
+                keys_to_remove.append(key)
+        keys = [key for key in keys if key not in keys_to_remove]
         
-                pred_mask = (pred_mask != 0).astype(int)
+        prompt = ""
+        for key in keys:
+            prompt += key + " . "
+        prompt = prompt.strip()
                 
-                # Compute iou
-                try:
-                    iou_score = get_iou(pred_mask, gt_mask)
-                except:
-                    iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
+        BOX_TRESHOLD = 0.35
+        TEXT_TRESHOLD = 0.25
+        
 
-                iou_results[query].append(iou_score)
+        # Get predicted bbox
+        boxes, logits, phrases = groundingdino.inference(
+            image_path=[filename],
+            caption=[prompt],
+            box_threshold=BOX_TRESHOLD,
+            text_threshold=TEXT_TRESHOLD,
+        )
+        
+        try:
+            phrases = [phrase[0] for phrase in phrases]
+        except:
+            phrases = []
+        
+        boxes=boxes[0]
+        
+        for i, phrase in enumerate(phrases):
+            try:
+                annots = json_obj[obj][phrase.title()]
+            except:
+                if phrase == 'cardiomediastinum':
+                    phrase = "Enlarged Cardiomediastinum"
+                elif phrase == 'lung' or phrase == 'lesion':
+                    phrase = "Lung Lesion"
+                elif phrase == 'airspace' or phrase == 'opacity':
+                    phrase = "Airspace Opacity"
+                elif phrase == 'pleural' or phrase == 'effusion':
+                    phrase = "Pleural Effusion"
+                annots = json_obj[obj][phrase.title()]
+            
+            gt_mask = mask_util.decode(annots)
+            
+            # print(boxes)
+            
+            bbox = boxes[i].type(torch.int64)
+            pred_mask = np.zeros_like(gt_mask)
+            pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1 
+            pred_mask = (pred_mask != 0).astype(int)
+            
+            try:
+                iou_score = get_iou(pred_mask, gt_mask)
+            except:
+                iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
+            
+            iou_results[phrase.title()].append(iou_score)
+            
+        for phrase in list(set(keys) - set(phrases)):
+            annots = json_obj[obj][phrase]
+            gt_mask = mask_util.decode(annots)
+            
+            iou_score = get_iou(np.zeros_like(gt_mask), gt_mask)
+            iou_results[phrase].append(iou_score)
     
     # Compute and print pathology-specific mIoUs
     total_sum = 0
@@ -382,7 +391,7 @@ class UnitTest:
         # print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
         # print("Starting Grounded-SAM, PASCAL...")
-        # print("Grounded-SAM, PASCAL - 202: ", eval_results("pascal", "grounded-sam"))
+        # print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
         
         # print(eval_results("chexlocalize", "grounded-sam"))
         # print("Grounded-SAM, CheXlocalize adaptation only - 303: ", eval_results("chexlocalize", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
@@ -391,8 +400,8 @@ class UnitTest:
 
         # print("Grounded-SAM, PASCAL - 6565: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_6565.pth"))
         
-        # print("Starting BioViL, CheXlocalize, GRADCAM=False...")
-        # print("BioViL, CheXlocalize, GRADCAM=False: ", eval_results("chexlocalize", "biovil"))
+        print("Starting BioViL, CheXlocalize, GRADCAM=False...")
+        print("BioViL, CheXlocalize, GRADCAM=False: ", eval_results("chexlocalize", "biovil", use_sam=False))
         
         # print("Starting BioViL, CheXlocalize, GRADCAM=True...")
         # print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))
@@ -403,14 +412,14 @@ class UnitTest:
         # print("Starting BioViL, PASCAL, GRADCAM=True...")
         # print("BioViL, PASCAL, GRADCAM=True: ", eval_results("pascal", "biovil", GRADCAM=True))
 
-        print("Starting Grounded-SAM, CheXpert...")
-        print("Grounded-SAM, CheXpert: ", eval_results(
-            dataset = "chexpert", 
-            model = "grounded-sam",
-            ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth", 
-            ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
-            ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
-        ))
+        # print("Starting Grounded-SAM, CheXpert...")
+        # print("Grounded-SAM, CheXpert: ", eval_results(
+        #     dataset = "chexpert", 
+        #     model = "grounded-sam",
+        #     ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth", 
+        #     ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
+        #     ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
+        # ))
 
         # print("Starting BiomedCLIP, CheXpert...")
         # print("BiomedCLIP, CheXpert: ", eval_results(
@@ -459,6 +468,6 @@ def displace_results():
 
 
 if __name__=='__main__':
-    # unit_test = UnitTest()
-    # unit_test.run_eval_scripts()
-    displace_results()
+    unit_test = UnitTest()
+    unit_test.run_eval_scripts()
+    # displace_results()

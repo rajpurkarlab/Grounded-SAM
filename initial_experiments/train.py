@@ -137,22 +137,31 @@ def train(hyperparams):
             image_paths = data["image_path"]
             reports = data["report"]
 
-            # Compute loss
+            # Compute adaptation loss on medical data (target domain)
             groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss = compute_adaptation_loss(
                 image_paths, reports, my_groundingdino, my_biovil, my_sam,
             )
+
+            # Compute adaptation loss on pascal data (source domain)
+            # groundingdino_img_loss_s, groundingdino_txt_loss_s, groundingdino_img_txt_loss_s, sam_img_loss_s = compute_adaptation_loss_pascal(
+            #     next(pascal_dataloader_iter), my_groundingdino, my_biovil, my_sam,
+            # )
             
+            # Compute detection loss
             if i % log_image_every == 0:
                 loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, viz=True, log_to_wandb=log_to_wandb)
             else:
                 loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
             
-            # loss_classif = classification_loss(data, my_groundingdino, batch_size_seg)
+            loss_classif = classification_loss(data, my_groundingdino, batch_size_seg)
             
-            loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss) \
-                          + lambda_img_txt * groundingdino_img_txt_loss + lambda_detection * loss_detection \
-                        #   + lambda_classif * loss_classif
-
+            #+ groundingdino_img_loss_s + groundingdino_txt_loss_s
+            #groundingdino_img_txt_loss_s
+            loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss ) \
+                          + lambda_img_txt * (groundingdino_img_txt_loss ) \
+                          + lambda_detection * loss_detection \
+                          + lambda_classif * loss_classif
+            
             if i % log_image_every == 0:
                 save_viz(my_groundingdino, step=i, log_to_wandb=log_to_wandb)
             
@@ -163,6 +172,10 @@ def train(hyperparams):
                     "train/groundingdino_img_loss": groundingdino_img_loss,
                     "train/groundingdino_txt_loss": groundingdino_txt_loss,
                     "train/groundingdino_img_txt_loss": groundingdino_img_txt_loss,
+                    "train/classif_loss": loss_classif,
+                    # "train/groundingdino_img_loss_s": groundingdino_img_loss_s,
+                    # "train/groundingdino_txt_loss_s": groundingdino_txt_loss_s,
+                    # "train/groundingdino_img_txt_loss_s": groundingdino_img_txt_loss_s,
                     "train/loss_detection": loss_detection,
                     "train/learning_rate": scheduler.get_last_lr()[0],
                 })
@@ -188,14 +201,21 @@ def train(hyperparams):
                     )
 
                 # Evaluation
-                iou_pascal = eval_results("pascal", "grounded-sam", f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_backbone_{i}.pth")
-                iou_chex = eval_results("chexlocalize", "grounded-sam", f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_backbone_{i}.pth")
+                iou_pascal = eval_results(
+                    "pascal", 
+                    "grounded-sam", 
+                    save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth"
+                )
+
+                iou_chex = eval_results("chexlocalize", "grounded-sam", save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth")
+
                 auc_chexpert = eval_results(
                     "chexpert", "grounded-sam",
-                    ckpt_file = f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_backbone_{i}.pth", 
-                    ckpt_img_linear = f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_img_linear_{i}.pth",
-                    ckpt_txt_linear = f"./initial_experiments/ckpts_2/initial_experiments_groundingdino_txt_linear_{i}.pth",
+                    ckpt_file = save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth", 
+                    ckpt_img_linear = save_folder + f"initial_experiments_groundingdino_img_linear_{i}.pth",
+                    ckpt_txt_linear = save_folder + f"initial_experiments_groundingdino_txt_linear_{i}.pth",
                 )
+
                 if log_to_wandb:
                     wandb.log({
                         "val/iou_pascal": iou_pascal, 
@@ -217,8 +237,23 @@ def inf_data_gen(dataloader):
             yield data
 
 
+def compute_adaptation_loss_pascal(data, my_groundingdino, my_biovil, my_sam):
+    """Compute adaptation loss between grounding dino and biomedclip + between sam and biovil.
+
+    This is analogous to compute_adaptation_loss, but for pascal dataset.
+    """
+    # Load data
+    image_paths = data["image_path"]
+    labels = data["label"]
+    for i in range(len(labels)):
+        labels[i] = f"{labels[i]}"
+
+    # Compute loss with helper function
+    return compute_adaptation_loss(image_paths, labels, my_groundingdino, my_biovil, my_sam)
+
+
 def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biovil, my_sam):
-    """Compute adaptation loss between grounding dino and biomedclip + between sam and biomedclip.
+    """Compute adaptation loss between grounding dino and biomedclip + between sam and biovil.
     
     Loss function: cosine similarity between embeddings if SAM is activated, InfoNCE loss if SAM is not activated.
     """
@@ -263,7 +298,7 @@ def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biovil, m
 
 
 def classification_loss(data, my_groundingdino, batch_size):
-    """Compute detection loss."""
+    """Compute classification loss."""
     # Load data
     image_paths = data["image_path"]
     l = data["labels"]
@@ -282,7 +317,7 @@ def classification_loss(data, my_groundingdino, batch_size):
                 
         b_loss = 0
         # Positive
-        pred_bboxs, logits = my_groundingdino.predict([image_paths[b]], pos+neg, box_threshold=0.0)
+        pred_bboxs, logits = my_groundingdino.predict([image_paths[b]], [(pos+neg)[0]], box_threshold=0.0)
         pdb.set_trace()
         for c in pos:
             
@@ -298,10 +333,10 @@ def classification_loss(data, my_groundingdino, batch_size):
     return loss
 
 
-def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.5, viz=False, log_to_wandb=False):
+def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=False, log_to_wandb=False):
     """Compute detection loss."""
     # Define loss function
-    obj_loss_fn = nn.BCEWithLogitsLoss(reduction="none")
+    obj_loss_fn = nn.BCELoss(reduction="mean")
     l1_loss_fn = nn.L1Loss(reduction="none")
 
     # Load data
@@ -327,21 +362,25 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.5, viz=Fals
 
         # Compute binary classification loss
         gt_label = ious > iou_thres
+        if gt_label.sum() == 0: # Pick top prediction if no box > threshold
+            max_iou, max_idx = ious.max(dim=0)
+            gt_label[max_idx] = 1
         obj_loss = obj_loss_fn(logits[b], gt_label.float())
 
         # Comput regression loss
         gt_bboxs_target = gt_bboxs_target[gt_indices]
         giou_loss = ops.generalized_box_iou_loss(gt_bboxs_target, pred_bboxs[b], reduction="none")
-        # l1_loss = l1_loss_fn(gt_bboxs_target, pred_bboxs[b]).sum(dim=1)
-        reg_loss = gt_label.float() * giou_loss # only compute loss for positive predictions
+        l1_loss = l1_loss_fn(gt_bboxs_target, pred_bboxs[b]).mean(dim=1) / 256 # normalize by image size
+        reg_loss = (gt_label.float() * (2.0 * giou_loss + 5.0 * l1_loss)).sum() / gt_label.sum()
 
         # Compute total loss
-        total_loss += obj_loss.mean() + reg_loss.mean()
+        total_loss += 2.0 * obj_loss + reg_loss
     
+
     if viz:
-        # Get prediction with highest IoU for the last sample
+        # Get prediction with highest logits for the last sample
         b = B - 1
-        best_iou, best_idx = ious.max(dim=0)
+        best_logit, best_idx = logits[b].max(dim=0)
         bbox = pred_bboxs[b][best_idx]   
         bbox2 = gt_bboxs_target[best_idx]
         
@@ -505,11 +544,11 @@ class UnitTest:
             "num_epochs": 3,
             "num_workers": 4,
             "use_sam": False,
-            "save_every": 200,
+            "save_every": 100,
             "log_image_every": 20,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-            "save_folder": "./initial_experiments/ckpts_2/",
-            "log_to_wandb": True,
+            "save_folder": "./initial_experiments/ckpts/",
+            "log_to_wandb": False,
         }
         train(hyperparams)
         
