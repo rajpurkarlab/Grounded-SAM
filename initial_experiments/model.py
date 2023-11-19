@@ -217,7 +217,7 @@ class myGroundingDino:
         
             boxes = prediction_boxes # [mask]  # boxes.shape = (B, 4)
             logits = prediction_logits # [mask]  # logits.shape = (B, 256)
-            print(B, boxes.shape, logits.shape)
+            # print(B, boxes.shape, logits.shape)
             # logits = logits.max(dim=1)[0]
             # print(B, boxes.shape, logits.shape)
             # raise Exception()
@@ -310,6 +310,94 @@ class myGroundingDino:
         outputs = self.model(image, captions=caption)
         prediction_logits = outputs["pred_logits"].sigmoid()  # prediction_logits.shape = (B, nq, 256), where nq = 900
         prediction_boxes = outputs["pred_boxes"]  # prediction_boxes.shape = (B, nq, 4)
+
+        """
+        ==========
+        TODO: Edit below code to get max-logit box for each prompt 
+        as opposed to all boxes above threshold and phrase
+        corresponding to each
+        ==========
+        """
+        
+        # Resize boxes from [0, 1] to original dimension of the image
+        for i in range(B):
+            h, w, _ = source_image[i].shape
+            prediction_boxes[i] = prediction_boxes[i] * torch.Tensor([w, h, w, h]).to(self.device)
+        prediction_boxes = box_convert(boxes=prediction_boxes, in_fmt="cxcywh", out_fmt="xyxy")
+        
+        boxes = prediction_boxes
+        logits = prediction_logits
+        
+        # Tokenize caption
+        tokenizer = self.model.tokenizer
+        tokenized = tokenizer(caption)
+
+        # Separate tokenized into single samples
+        tokenized_samples = [{} for _ in range(B)]
+        for key, val in tokenized.items():
+            for b in range(B):
+                tokenized_samples[b][key] = val[b]
+                
+        if True:
+            PHRASES = []
+            for b in range(B):
+                sep_idx = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
+                
+                phrases = []
+                for logit in logits[b]:
+                    max_idx = logit.argmax()
+                    insert_idx = bisect.bisect_left(sep_idx, max_idx)
+                    right_idx = sep_idx[insert_idx]
+                    left_idx = sep_idx[insert_idx - 1]
+                    phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
+                PHRASES.append(phrases)
+        # pdb.set_trace()
+        
+        new_boxes = []
+        new_logits = []
+        for b in range(B):
+            phrases = [string for index, string in enumerate(PHRASES[b]) if string != ""]
+            
+            # pdb.set_trace()
+            
+            bbs = []
+            lls = []
+            
+            for text_prompt in caption[0].split("."):
+                text_prompt = text_prompt.strip()
+                if text_prompt:
+                    f = [index for index, string in enumerate(PHRASES[b]) if string == text_prompt]
+                    # pdb.set_trace()
+                    # new_boxes.append(boxes[b][f])
+                    # new_logits.append(logits[b][f])
+                    # PHRASES[b] = phrases
+                    try:
+                        mask = logits[b][f].max(dim=1)[0] == logits[b][f].max(dim=1)[0].max(dim=0)[0] # mask.shape = (B, n)
+                        bbs.append(boxes[b][f][mask])
+                        lls.append(logits[b][f][mask])
+                    except:
+                        bbs.append(torch.zeros((1,4), device='cuda'))
+                        lls.append(torch.zeros((1,256), device='cuda'))
+            new_boxes.append(torch.cat(bbs, dim=0))
+            new_logits.append(torch.cat(lls, dim=0))
+            # pdb.set_trace()
+        
+        boxes = torch.stack(new_boxes)
+        logits = torch.stack(new_logits)
+        # print(boxes.shape)
+        
+        # boxes= boxes[mask]
+        # logits=logits[mask]
+        logits = logits.max(dim=1)[0]
+        
+        
+        return boxes, logits
+        
+        
+        
+        
+        
+        
 
         # Filter based on box threshold
         mask = prediction_logits.max(dim=2)[0] > box_threshold # mask.shape = (B, nq)

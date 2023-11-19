@@ -119,7 +119,7 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
                     pred_mask = run_grounded_sam(img_path, text_prompt, groundingdino_model, sam_predictor)
                 else:
                     bbox, logits, phrases = groundingdino.predict([img_path], [text_prompt], box_threshold=0.0)
-                    # print(text_prompt, phrases)
+                    print(text_prompt, phrases)
                     bbox = bbox[0][0].type(torch.int64)
                     pred_mask = np.zeros_like(gt_mask)
                     pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1 

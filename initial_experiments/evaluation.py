@@ -109,21 +109,22 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
         TEXT_TRESHOLD = 0.25
 
         # Get predicted bbox
-        boxes, logits, phrases = groundingdino.inference(
+        boxes, logits = groundingdino.inference(
             image_path=[img_path],
             caption=[prompt],
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
         )
         
-        try:
-            phrases = [phrase[0] for phrase in phrases]
-        except:
-            phrases = []
+        # try:
+        #     phrases = [phrase[0] for phrase in phrases]
+        # except:
+        #     phrases = []
         
         boxes=boxes[0]
+        # print(boxes.shape)
         
-        for i, phrase in enumerate(phrases):
+        for i, phrase in enumerate(keys):
             gt_mask = gt_masks[phrase]
             
             bbox = boxes[i].type(torch.int64)
@@ -136,11 +137,6 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
             except:
                 iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
             
-            iou_results[phrase].append(iou_score)
-            
-        for phrase in list(set(keys)-set(phrases)):
-            gt_mask = gt_masks[phrase]
-            iou_score = get_iou(np.zeros_like(gt_mask), gt_mask)
             iou_results[phrase].append(iou_score)
 
     # compute average mIoU across all classes
@@ -390,8 +386,8 @@ class UnitTest:
         # print("Starting Grounded-SAM, CheXlocalize...")
         # print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
-        # print("Starting Grounded-SAM, PASCAL...")
-        # print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
+        print("Starting Grounded-SAM, PASCAL...")
+        print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
         
         # print(eval_results("chexlocalize", "grounded-sam"))
         # print("Grounded-SAM, CheXlocalize adaptation only - 303: ", eval_results("chexlocalize", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
@@ -400,8 +396,8 @@ class UnitTest:
 
         # print("Grounded-SAM, PASCAL - 6565: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_6565.pth"))
         
-        print("Starting BioViL, CheXlocalize, GRADCAM=False...")
-        print("BioViL, CheXlocalize, GRADCAM=False: ", eval_results("chexlocalize", "biovil", use_sam=False))
+        # print("Starting BioViL, CheXlocalize, GRADCAM=False...")
+        # print("BioViL, CheXlocalize, GRADCAM=False: ", eval_results("chexlocalize", "biovil", use_sam=False))
         
         # print("Starting BioViL, CheXlocalize, GRADCAM=True...")
         # print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))
