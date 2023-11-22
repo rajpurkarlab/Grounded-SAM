@@ -15,6 +15,7 @@ import pdb
 from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import time
 
 import json
 from uuid import uuid4
@@ -181,6 +182,8 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
     # Loop through all test samples (pathology, image, ground-truth mask) tuples
     for obj in tqdm(json_obj):
         filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
+
+        curr_time = time.time()
         
         # Filter out phrases that are not in PROMPTS and empty masks
         keys = list(json_obj[obj].keys())
@@ -190,7 +193,6 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
                 keys_to_remove.append(key)
         keys = [key for key in keys if key not in keys_to_remove]
 
-        
         # Filter out empty masks not captured by "ifdl3"
         gt_masks = []
         keys_to_remove = []
@@ -209,8 +211,8 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
             prompt += key + " . "
         prompt = prompt.strip()
                 
-        BOX_TRESHOLD = 0.35
-        TEXT_TRESHOLD = 0.25
+        BOX_TRESHOLD = 0.05
+        TEXT_TRESHOLD = 0.05
 
         # Get predicted bbox
         boxes, _ = groundingdino.inference(
@@ -220,25 +222,16 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
             text_threshold=TEXT_TRESHOLD,
         )
         boxes=boxes[0]
-        
+
         # Compute IoU for each phrase
         for i, phrase in enumerate(keys):
             gt_mask = gt_masks[i]
-            
-            bbox = boxes[i].type(torch.int64)
-            pred_mask = np.zeros_like(gt_mask)
-            pred_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1 
-            pred_mask = (pred_mask != 0).astype(int)
-            
-            try:
-                iou_score = get_iou(pred_mask, gt_mask)
-            except:
-                iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
-            
-            # print(bbox, gt_mask.max(), iou_score)
+            bbox = boxes[i].type(torch.int64).cpu().numpy()
+
+            # Optimized iou computation between prediction bbox and gt_mask
+            iou_score = compute_iou_optimized(bbox, gt_mask)
             iou_results[phrase.title()].append(iou_score)
         
-    
     # Compute and print pathology-specific mIoUs
     total_sum = 0
     total_count = 0
@@ -255,6 +248,36 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
     json.dump(mIoU_classes, open(f'chexlocalize_{model}_sam={use_sam}.json', 'w'))
     
     return mIoU
+
+
+def compute_iou_optimized(bbox, seg_mask):
+    """
+    Compute the Intersection over Union (IoU) between a bounding box and a segmentation mask, optimized version.
+    
+    Parameters:
+    bbox (tuple): A tuple of (xmin, ymin, xmax, ymax) representing the bounding box.
+    seg_mask (numpy array): A 2D numpy array where 1 represents the segmented object and 0 otherwise.
+
+    Returns:
+    float: The IoU value.
+    """
+    xmin, ymin, xmax, ymax = bbox
+
+    # Clip the bounding box coordinates to be within the mask dimensions
+    xmin, xmax = max(xmin, 0), min(xmax, seg_mask.shape[1])
+    ymin, ymax = max(ymin, 0), min(ymax, seg_mask.shape[0])
+
+    if xmax <= xmin or ymax <= ymin:
+        return 0.0  # No overlap
+
+    # Extract the relevant portion of the segmentation mask
+    seg_mask_subset = seg_mask[ymin:ymax, xmin:xmax]
+
+    # Count pixels for intersection and union
+    intersection = np.sum(seg_mask_subset)
+    union = (xmax - xmin) * (ymax - ymin) + np.sum(seg_mask) - intersection
+
+    return intersection / union if union != 0 else 0
 
 
 def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):

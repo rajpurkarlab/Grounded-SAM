@@ -6,6 +6,7 @@ import sys
 sys.path.extend(["../", "./"])
 
 import pdb
+import time
 import torch
 import torchvision
 from torchvision.ops import box_convert, box_iou
@@ -319,9 +320,13 @@ class myGroundingDino:
             h, w, _ = source_image[i].shape
             prediction_boxes[i] = prediction_boxes[i] * torch.Tensor([w, h, w, h]).to(self.device)
         prediction_boxes = box_convert(boxes=prediction_boxes, in_fmt="cxcywh", out_fmt="xyxy")
-        
-        boxes = prediction_boxes
-        logits = prediction_logits
+
+        # Filter box based on threshold
+        boxes, logits = [], []
+        for b in range(B):
+            mask = prediction_logits[b].max(dim=1)[0] > box_threshold
+            boxes.append(prediction_boxes[b][mask])
+            logits.append(prediction_logits[b][mask])
         
         # Tokenize caption
         tokenizer = self.model.tokenizer
@@ -332,7 +337,7 @@ class myGroundingDino:
         for key, val in tokenized.items():
             for b in range(B):
                 tokenized_samples[b][key] = val[b]
-                
+
         # Copied from GD predict codebase, return a list (image-level) of list (object-level) of phrases
         PHRASES = []
         for b in range(B):
@@ -346,15 +351,13 @@ class myGroundingDino:
                 left_idx = sep_idx[insert_idx - 1]
                 phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
             PHRASES.append(phrases)
-        
-        
+
+        # Filter for the highest confidence box for each phrase
         new_boxes = []
         new_logits = []
         for b in range(B):
             # Remove empty phrases
             phrases = [string for index, string in enumerate(PHRASES[b]) if string != ""]
-            
-            # pdb.set_trace()
             
             bbs = [] # max logit box - shape: (num_phrases, 4)
             lls = [] # the logit for the max logit box - shape: (num_phrases, 256)
@@ -362,29 +365,24 @@ class myGroundingDino:
             for text_prompt in caption[b].split("."):
                 text_prompt = text_prompt.strip()
                 if text_prompt:
-                    f = [index for index, string in enumerate(PHRASES[b]) if string == text_prompt]
-                    # pdb.set_trace()
-                    # new_boxes.append(boxes[b][f])
-                    # new_logits.append(logits[b][f])
-                    # PHRASES[b] = phrases
+                    f = [index for index, string in enumerate(PHRASES[b]) if string in text_prompt]
                     try:
                         mask = logits[b][f].max(dim=1)[0] == logits[b][f].max(dim=1)[0].max(dim=0)[0] # mask.shape = (B, n)
                         bbs.append(boxes[b][f][mask])
                         lls.append(logits[b][f][mask])
-                    except: # when no box corresponding to a certaint phrse
+                    except: # when no box corresponding to a certain phrase
                         bbs.append(torch.zeros((1,4), device='cuda'))
                         lls.append(torch.zeros((1,256), device='cuda'))
             new_boxes.append(torch.cat(bbs, dim=0))
-            # print(torch.cat(bbs, dim=0).shape)
-            new_logits.append(torch.cat(lls, dim=0))
-            # pdb.set_trace()
-        if B == 1: # during evaluation, we only have one image
+            new_logits.append(torch.cat(lls, dim=0))     
+        
+        # During evaluation, we only have one image
+        if B == 1: 
             boxes = torch.stack(new_boxes)
             logits = torch.stack(new_logits)
-            
             logits = torch.stack([logit.max(dim=1)[0] for logit in logits])
             return boxes, logits
-        
+
         return new_boxes, [logit.max(dim=1)[0] for logit in new_logits]
         
 
