@@ -182,17 +182,16 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
     for obj in tqdm(json_obj):
         filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
         
-        # Filter out phrases that are not in PROMPTS and no masks
+        # Filter out phrases that are not in PROMPTS and empty masks
         keys = list(json_obj[obj].keys())
         keys_to_remove = []
         for i, key in enumerate(keys):
-            if key not in PROMPTS or json_obj[obj][key] == 'ifdl3':
+            if key not in PROMPTS or json_obj[obj][key]["counts"]=='ifdl3':
                 keys_to_remove.append(key)
         keys = [key for key in keys if key not in keys_to_remove]
-        print("first")
-        print(keys)
 
         
+        # Filter out empty masks not captured by "ifdl3"
         gt_masks = []
         keys_to_remove = []
         for i, phrase in enumerate(keys):
@@ -203,10 +202,7 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
             else:
                 gt_masks.append(gt_mask)
         keys = [key for key in keys if key not in keys_to_remove]
-        print("second")
-        print(keys)
         
-        pdb.set_trace()
         # Concatenate all queries into one prompt for GD
         prompt = ""
         for key in keys:
@@ -215,7 +211,6 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
                 
         BOX_TRESHOLD = 0.35
         TEXT_TRESHOLD = 0.25
-       
 
         # Get predicted bbox
         boxes, _ = groundingdino.inference(
@@ -224,9 +219,9 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
         )
+        boxes=boxes[0]
         
-        boxes=boxes[0]           
-        
+        # Compute IoU for each phrase
         for i, phrase in enumerate(keys):
             gt_mask = gt_masks[i]
             
