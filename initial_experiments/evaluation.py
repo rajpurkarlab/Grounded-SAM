@@ -99,6 +99,7 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
         gt_path = gt_folder_path + '/' + id + '.png'
         gt_masks = get_queries(gt_path, Image.open(img_path).size)
         
+        # Concatenate all queries into one prompt for GD
         keys = list(gt_masks.keys())
         prompt = ""
         for key in keys:
@@ -109,20 +110,14 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
         TEXT_TRESHOLD = 0.25
 
         # Get predicted bbox
-        boxes, logits = groundingdino.inference(
+        boxes, _ = groundingdino.inference(
             image_path=[img_path],
             caption=[prompt],
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
         )
         
-        # try:
-        #     phrases = [phrase[0] for phrase in phrases]
-        # except:
-        #     phrases = []
-        
         boxes=boxes[0]
-        # print(boxes.shape)
         
         for i, phrase in enumerate(keys):
             gt_mask = gt_masks[phrase]
@@ -187,14 +182,32 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
     for obj in tqdm(json_obj):
         filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
         
-        # Loop through all pathologies in a test sample
+        # Filter out phrases that are not in PROMPTS and no masks
         keys = list(json_obj[obj].keys())
         keys_to_remove = []
         for i, key in enumerate(keys):
             if key not in PROMPTS or json_obj[obj][key] == 'ifdl3':
                 keys_to_remove.append(key)
         keys = [key for key in keys if key not in keys_to_remove]
+        print("first")
+        print(keys)
+
         
+        gt_masks = []
+        keys_to_remove = []
+        for i, phrase in enumerate(keys):
+            annots = json_obj[obj][phrase.title()]
+            gt_mask = mask_util.decode(annots)
+            if gt_mask.max() == 0:
+                keys_to_remove.append(phrase)
+            else:
+                gt_masks.append(gt_mask)
+        keys = [key for key in keys if key not in keys_to_remove]
+        print("second")
+        print(keys)
+        
+        pdb.set_trace()
+        # Concatenate all queries into one prompt for GD
         prompt = ""
         for key in keys:
             prompt += key + " . "
@@ -202,40 +215,20 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
                 
         BOX_TRESHOLD = 0.35
         TEXT_TRESHOLD = 0.25
-        
+       
 
         # Get predicted bbox
-        boxes, logits, phrases = groundingdino.inference(
+        boxes, _ = groundingdino.inference(
             image_path=[filename],
             caption=[prompt],
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
         )
         
-        try:
-            phrases = [phrase[0] for phrase in phrases]
-        except:
-            phrases = []
+        boxes=boxes[0]           
         
-        boxes=boxes[0]
-        
-        for i, phrase in enumerate(phrases):
-            try:
-                annots = json_obj[obj][phrase.title()]
-            except:
-                if phrase == 'cardiomediastinum':
-                    phrase = "Enlarged Cardiomediastinum"
-                elif phrase == 'lung' or phrase == 'lesion':
-                    phrase = "Lung Lesion"
-                elif phrase == 'airspace' or phrase == 'opacity':
-                    phrase = "Airspace Opacity"
-                elif phrase == 'pleural' or phrase == 'effusion':
-                    phrase = "Pleural Effusion"
-                annots = json_obj[obj][phrase.title()]
-            
-            gt_mask = mask_util.decode(annots)
-            
-            # print(boxes)
+        for i, phrase in enumerate(keys):
+            gt_mask = gt_masks[i]
             
             bbox = boxes[i].type(torch.int64)
             pred_mask = np.zeros_like(gt_mask)
@@ -247,14 +240,9 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
             except:
                 iou_score = get_iou(pred_mask, np.swapaxes(gt_mask,0,1))
             
+            # print(bbox, gt_mask.max(), iou_score)
             iou_results[phrase.title()].append(iou_score)
-            
-        for phrase in list(set(keys) - set(phrases)):
-            annots = json_obj[obj][phrase]
-            gt_mask = mask_util.decode(annots)
-            
-            iou_score = get_iou(np.zeros_like(gt_mask), gt_mask)
-            iou_results[phrase].append(iou_score)
+        
     
     # Compute and print pathology-specific mIoUs
     total_sum = 0
@@ -386,8 +374,8 @@ class UnitTest:
         # print("Starting Grounded-SAM, CheXlocalize...")
         # print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
-        print("Starting Grounded-SAM, PASCAL...")
-        print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
+        # print("Starting Grounded-SAM, PASCAL...")
+        # print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
         
         # print(eval_results("chexlocalize", "grounded-sam"))
         # print("Grounded-SAM, CheXlocalize adaptation only - 303: ", eval_results("chexlocalize", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
@@ -396,8 +384,8 @@ class UnitTest:
 
         # print("Grounded-SAM, PASCAL - 6565: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_6565.pth"))
         
-        # print("Starting BioViL, CheXlocalize, GRADCAM=False...")
-        # print("BioViL, CheXlocalize, GRADCAM=False: ", eval_results("chexlocalize", "biovil", use_sam=False))
+        print("Starting GD, CheXlocalize...")
+        print("GD, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
         # print("Starting BioViL, CheXlocalize, GRADCAM=True...")
         # print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))
@@ -434,7 +422,6 @@ class UnitTest:
         #     dataset = "chexpert", 
         #     model = "biovil",
         # ))
-
 
 
 def displace_results():

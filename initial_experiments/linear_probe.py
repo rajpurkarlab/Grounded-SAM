@@ -34,6 +34,7 @@ class LinearProbe(torch.nn.Module):
         if len(input_dims) > 1:
             self.final_layer = torch.nn.Linear(len(input_dims) * output_dim, output_dim).to(device)
 
+
     def forward(self, input_emb):
         """Run linear layer to convert input_emb to dimension of output_emb.
 
@@ -62,6 +63,7 @@ class LinearProbe(torch.nn.Module):
             output_emb = torch.cat(output_emb, dim=1)
             output_emb = [self.final_layer(output_emb)]
         return output_emb[0]
+
 
 def linear_probe_tests():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

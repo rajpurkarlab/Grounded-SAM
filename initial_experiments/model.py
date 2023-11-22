@@ -231,6 +231,8 @@ class myGroundingDino:
         for key, val in tokenized.items():
             for b in range(B):
                 tokenized_samples[b][key] = val[b]
+
+        pdb.set_trace()
                 
         if True:
             PHRASES = []
@@ -277,13 +279,14 @@ class myGroundingDino:
         
         return boxes, logits, PHRASES
 
+
     def inference(
         self,
         image_path,
         caption,
-        box_threshold,
+        box_threshold, # not used
         text_threshold,
-    ):  
+    ):
         """Open-vocabulary phrase grounding using Grounding Dino during inference.
 
         Args:
@@ -310,14 +313,6 @@ class myGroundingDino:
         outputs = self.model(image, captions=caption)
         prediction_logits = outputs["pred_logits"].sigmoid()  # prediction_logits.shape = (B, nq, 256), where nq = 900
         prediction_boxes = outputs["pred_boxes"]  # prediction_boxes.shape = (B, nq, 4)
-
-        """
-        ==========
-        TODO: Edit below code to get max-logit box for each prompt 
-        as opposed to all boxes above threshold and phrase
-        corresponding to each
-        ==========
-        """
         
         # Resize boxes from [0, 1] to original dimension of the image
         for i in range(B):
@@ -338,32 +333,33 @@ class myGroundingDino:
             for b in range(B):
                 tokenized_samples[b][key] = val[b]
                 
-        if True:
-            PHRASES = []
-            for b in range(B):
-                sep_idx = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
-                
-                phrases = []
-                for logit in logits[b]:
-                    max_idx = logit.argmax()
-                    insert_idx = bisect.bisect_left(sep_idx, max_idx)
-                    right_idx = sep_idx[insert_idx]
-                    left_idx = sep_idx[insert_idx - 1]
-                    phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
-                PHRASES.append(phrases)
-        # pdb.set_trace()
+        # Copied from GD predict codebase, return a list (image-level) of list (object-level) of phrases
+        PHRASES = []
+        for b in range(B):
+            sep_idx = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
+            
+            phrases = []
+            for logit in logits[b]:
+                max_idx = logit.argmax()
+                insert_idx = bisect.bisect_left(sep_idx, max_idx)
+                right_idx = sep_idx[insert_idx]
+                left_idx = sep_idx[insert_idx - 1]
+                phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
+            PHRASES.append(phrases)
+        
         
         new_boxes = []
         new_logits = []
         for b in range(B):
+            # Remove empty phrases
             phrases = [string for index, string in enumerate(PHRASES[b]) if string != ""]
             
             # pdb.set_trace()
             
-            bbs = []
-            lls = []
-            
-            for text_prompt in caption[0].split("."):
+            bbs = [] # max logit box - shape: (num_phrases, 4)
+            lls = [] # the logit for the max logit box - shape: (num_phrases, 256)
+            # Get the max-logit box for each phrase in the caption
+            for text_prompt in caption[b].split("."):
                 text_prompt = text_prompt.strip()
                 if text_prompt:
                     f = [index for index, string in enumerate(PHRASES[b]) if string == text_prompt]
@@ -375,82 +371,22 @@ class myGroundingDino:
                         mask = logits[b][f].max(dim=1)[0] == logits[b][f].max(dim=1)[0].max(dim=0)[0] # mask.shape = (B, n)
                         bbs.append(boxes[b][f][mask])
                         lls.append(logits[b][f][mask])
-                    except:
+                    except: # when no box corresponding to a certaint phrse
                         bbs.append(torch.zeros((1,4), device='cuda'))
                         lls.append(torch.zeros((1,256), device='cuda'))
             new_boxes.append(torch.cat(bbs, dim=0))
+            # print(torch.cat(bbs, dim=0).shape)
             new_logits.append(torch.cat(lls, dim=0))
             # pdb.set_trace()
+        if B == 1: # during evaluation, we only have one image
+            boxes = torch.stack(new_boxes)
+            logits = torch.stack(new_logits)
+            
+            logits = torch.stack([logit.max(dim=1)[0] for logit in logits])
+            return boxes, logits
         
-        boxes = torch.stack(new_boxes)
-        logits = torch.stack(new_logits)
-        # print(boxes.shape)
+        return new_boxes, [logit.max(dim=1)[0] for logit in new_logits]
         
-        # boxes= boxes[mask]
-        # logits=logits[mask]
-        logits = logits.max(dim=1)[0]
-        
-        
-        return boxes, logits
-        
-        
-        
-        
-        
-        
-
-        # Filter based on box threshold
-        mask = prediction_logits.max(dim=2)[0] > box_threshold # mask.shape = (B, nq)
-        logits, boxes = [], []
-        for b in range(B):
-            logits.append(prediction_logits[b][mask[b]])
-            boxes.append(prediction_boxes[b][mask[b]])
-
-        # Tokenize caption
-        tokenizer = self.model.tokenizer
-        tokenized = tokenizer(caption)
-
-        # Separate tokenized into single samples
-        tokenized_samples = [{} for _ in range(B)]
-        for key, val in tokenized.items():
-            for b in range(B):
-                tokenized_samples[b][key] = val[b]
-
-        # For each bbox, get the token(s) that corresponds to it
-        if True:
-            phrases = []
-            for b in range(B):
-                sep_idx = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
-                
-                labels = []
-                for logit in logits[b]:
-                    max_idx = logit.argmax()
-                    insert_idx = bisect.bisect_left(sep_idx, max_idx)
-                    right_idx = sep_idx[insert_idx]
-                    left_idx = sep_idx[insert_idx - 1]
-                    labels.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
-            phrases.append(labels)
-        else:
-            phrases = []
-            for b in range(B):
-                labels = [
-                    get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer).replace('.', '')
-                    for logit in logits[b]
-                ]
-                phrases.append(labels)
-        
-    
-        # Resize boxes from [0, 1] to original dimension of the image
-        for b in range(B):
-            h, w, _ = source_image[b].shape
-            boxes[b] = boxes[b] * torch.Tensor([w, h, w, h]).to(self.device)
-            boxes[b] = box_convert(boxes=boxes[b], in_fmt="cxcywh", out_fmt="xyxy")
-
-        # Get max logits to return for each sample i
-        logits = [logit.max(dim=1)[0] for logit in logits]
-
-        return boxes, logits, phrases
-
 
     def forward(
         self,
@@ -490,6 +426,8 @@ class myGroundingDino:
             h, w, _ = source_image[b].shape
             boxes[b] = boxes[b] * torch.Tensor([w, h, w, h]).to(self.device)
         boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy")
+        
+        pdb.set_trace()
 
         # # Tokenize caption
         # tokenizer = self.model.tokenizer
@@ -1013,7 +951,8 @@ if __name__ == "__main__":
     
     # Grounding DINO
     # unit_test.test_grounding_dino()
-    unit_test.test_grounding_dino_forward()
+    # unit_test.test_grounding_dino_forward()
+    unit_test.test_grounding_dino_predict()
     # unit_test.test_grounding_dino_save()
 
     # # Biomed CLIP

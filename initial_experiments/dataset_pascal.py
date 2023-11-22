@@ -1,120 +1,152 @@
-import os
+import torchvision.datasets.voc as voc
 import torch
-import pandas as pd
-import numpy as np
-from tqdm import tqdm
+import torchvision
 from torch.utils.data import Dataset, DataLoader
-from linear_probe import LinearProbe
-import torch
-from torchvision import transforms
-from PIL import Image
+from tqdm import tqdm
+try:
+    from defusedxml.ElementTree import parse as ET_parse
+except ImportError:
+    from xml.etree.ElementTree import parse as ET_parse
 import pickle
-from transformers import SamProcessor
+import pdb
+import numpy as np
+import pdb
 
-from utils import get_queries, get_bounding_box
+class PascalVOC_Dataset(voc.VOCDetection):
+    """`Pascal VOC <http://host.robots.ox.ac.uk/pascal/VOC/>`_ Detection Dataset.
 
-
-class PASCALDataset(Dataset):
-    """PASCAL VOC dataset."""
-
-    def __init__(self):
-        self.processed_data_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/Processed'
+        Args:
+            root (string): Root directory of the VOC Dataset.
+            year (string, optional): The dataset year, supports years 2007 to 2012.
+            image_set (string, optional): Select the image_set to use, ``train``, ``trainval`` or ``val``
+            download (bool, optional): If true, downloads the dataset from the internet and
+                puts it in root directory. If dataset is already downloaded, it is not
+                downloaded again.
+                (default: alphabetic indexing of VOC's 20 classes).
+            transform (callable, optional): A function/transform that  takes in an PIL image
+                and returns a transformed version. E.g, ``transforms.RandomCrop``
+            target_transform (callable, required): A function/transform that takes in the
+                target and transforms it.
+    """
+    def __init__(self, root, year='2012', image_set='train', download=False, transform=None, target_transform=None):
         
+        super().__init__(
+             root, 
+             year=year, 
+             image_set=image_set, 
+             download=download, 
+             transform=transform, 
+             target_transform=target_transform)
+        
+        # self.preprocess()
 
-    def preprocess(self, size=(256,256)):
-        self.train_id_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/train.txt'
-        self.class_name_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/class_names.txt'
-        self.img_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages'
-        self.gt_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/SegmentationClass'
-        self.processor = processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+        with open(self.root + "pascalvoc_dataset.pkl", "rb") as f:
+            self.my_data = pickle.load(f)
     
-        # Load class names
-        self.class_names = []
-        for line in open(self.class_name_path, 'r'):
-            self.class_names.append(line.strip())
-        
-        # Load val ids
-        self.train_ids = []
-        for line in open(self.train_id_path, 'r'):
-            id = line.strip()
-            self.train_ids.append(id)
-        
-        self.size = size
-        
-        self.samples = []
-        
-        for idx in tqdm(range(len(self.train_ids))):
-            id = self.train_ids[idx]
-            img_path = self.img_folder_path + '/' + id + '.jpg'
 
-            gt_path = self.gt_folder_path + '/' + id + '.png'
+    def preprocess(self):
+        """Preprocess the dataset s.t. each sample if (image_path, label, list of all bbox for that label).
+        """
+        self.my_data = []
+
+        # Loop through all images
+        for i in tqdm(range(len(self.images))):
+            anno = self.parse_voc_xml(ET_parse(self.annotations[i]).getroot())["annotation"]
+            image_path = self.images[i]
             
-            gt_masks = get_queries(gt_path, self.size)
-
-            img = Image.open(img_path)
-            img = img.resize(self.size)
-                            
-            for val in gt_masks:
-                ground_truth_mask = gt_masks[val]
-                
-                prompt = get_bounding_box(ground_truth_mask)
+            labels = {}
+            # for key in ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow", "table", "dog", "horse", "motorbike", "person", "plant", "sheep", "sofa", "train", "monitor"]:
+            #     labels[key] = []
+    
             
-                # prepare image and prompt for the model
-                inputs = self.processor(img, input_boxes=[[prompt]], return_tensors="pt")
-
-                # remove batch dimension which the processor adds by default
-                inputs = {k:v.squeeze(0) for k,v in inputs.items()}
-
-                # add ground truth segmentation
-                inputs["ground_truth_mask"] = ground_truth_mask
+            for obj in anno["object"]:
+                label = obj["name"]
+                if label == "tvmonitor":
+                    label = "monitor"
+                elif label == "diningtable":
+                    label = "table"
+                elif label == "pottedplant":
+                    label = "plant"
+                if label not in labels:
+                    labels[label] = []
                 
-                inputs["image"] = transforms.ToTensor()(img)
-                inputs["image_path"] = img_path
-                inputs["category"] = val
+                labels[label].append([
+                    int(obj["bndbox"]["xmin"]), 
+                    int(obj["bndbox"]["ymin"]), 
+                    int(obj["bndbox"]["xmax"]), 
+                    int(obj["bndbox"]["ymax"])
+                ])
+            data = {
+                "image_path": image_path,
+                "labels": labels,
+            }
+            
+            self.my_data.append(data)
+        
+        # # Pad bboxs to have same shape
+        # bbox_shapes = [len(data["bbox"]) for data in self.my_data]
+        # max_dim0_shape = max(bbox_shapes)
 
-                # store to disk
-                with open(os.path.join(self.processed_data_path, f'sample_{idx}.pkl'), 'wb') as file:
-                    pickle.dump(inputs, file)
-
+        # for i in range(len(self.my_data)):
+        #     data = self.my_data[i]
+        #     bboxs = data["bbox"]
+        #     for j in range(max_dim0_shape - len(bboxs)):
+        #         bboxs.append([-1.,-1.,-1.,-1.])
+        #     data["bbox"] = torch.Tensor(bboxs)
+        
+        with open(self.root + "pascalvoc_dataset.pkl", "wb") as f:
+            pickle.dump(self.my_data, f)
+    
+    def __getitem__(self, index):
+        # print(index)
+        data = self.my_data[index]
+        # print(data)
+        # data["bbox"] = torch.Tensor(data["bbox"])
+        return data
     
     def __len__(self):
-        files = [f for f in os.listdir(self.processed_data_path)]
-        return len(files)
-
-    
-    def __getitem__(self, idx):
-        with open(os.path.join(self.processed_data_path, f'sample_{idx}.pkl'), 'rb') as file:
-            data = pickle.load(file)
-        return data
+        return len(self.my_data)
 
 
 def load_data(batch_size=16, num_workers=0):
     """Get dataloader for training.
     """
-    dataset = PASCALDataset()
-    l = len(dataset)
-    return l, DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    dataset = PascalVOC_Dataset(
+        root="/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/",
+        image_set="train",
+        transform=None
+    )
+    # collate function helps to stack samples with different length into a single batch
+    # may lead to slowness
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=lambda x: x )
 
 
 class UnitTest:
     def __init__(self):
         pass
 
+    def view_dataset(self):
+        dataset = PascalVOC_Dataset(
+            root="/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/",
+            image_set="train",
+            transform=None
+        )
+        print(dataset[0])
+        pdb.set_trace()
+
+
     def load_data_test(self):
-        num_samples, dataloader = load_data(batch_size=4)
+        dataloader = load_data(batch_size=16)
 
         print("Number of batches:", len(dataloader))
         for i, data in enumerate(tqdm(dataloader)):
-            print(type(data))
+            # print(data)
+            pdb.set_trace()
+            pass
         print("Passed all tests")
     
-    def preprocess_test(self):
-        dataset = PASCALDataset()
-        dataset.preprocess()
-        print("Passed preprocess")
 
-
-if __name__=='__main__':
-    unit_test = UnitTest()
-    unit_test.preprocess_test()
-    # unit_test.load_data_test()
+if __name__ == "__main__":
+    unittest = UnitTest()
+    # unittest.view_dataset()
+    unittest.load_data_test()

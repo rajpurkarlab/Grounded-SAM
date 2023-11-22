@@ -8,7 +8,7 @@ Iteratively train between adaptation and segmentation objectives:
 import os
 import pdb
 import cv2
-
+import time
 import torch
 import pycocotools.mask as mask_util
 import json
@@ -27,7 +27,7 @@ from PIL import Image
 from transformers import SamProcessor
 from info_nce import InfoNCE
 
-from evaluation_mm import eval_results
+from evaluation import eval_results
 from utils import PROMPTS
 
 from model import myGroundingDino, myBiomedCLIP, mySAM, myBioViL
@@ -138,9 +138,12 @@ def train(hyperparams):
             reports = data["report"]
 
             # Compute adaptation loss on medical data (target domain)
+            # start_time = time.time()
             groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss = compute_adaptation_loss(
                 image_paths, reports, my_groundingdino, my_biovil, my_sam,
             )
+            # end_time = time.time()
+            # print(f'Time taken: {end_time - start_time} seconds')
 
             # Compute adaptation loss on pascal data (source domain)
             # groundingdino_img_loss_s, groundingdino_txt_loss_s, groundingdino_img_txt_loss_s, sam_img_loss_s = compute_adaptation_loss_pascal(
@@ -148,12 +151,18 @@ def train(hyperparams):
             # )
             
             # Compute detection loss
+            # start_time = time.time()
             if i % log_image_every == 0:
                 loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, viz=True, log_to_wandb=log_to_wandb)
             else:
                 loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
+            # end_time = time.time()
+            # print(f'Time taken: {end_time - start_time} seconds')
             
-            loss_classif = classification_loss(data, my_groundingdino, batch_size_seg)
+            # # start_time = time.time()
+            # loss_classif = classification_loss(data, my_groundingdino, batch_size_seg)
+            # end_time = time.time()
+            # # print(f'Time taken: {end_time - start_time} seconds')
             
             #+ groundingdino_img_loss_s + groundingdino_txt_loss_s
             #groundingdino_img_txt_loss_s
@@ -315,18 +324,31 @@ def classification_loss(data, my_groundingdino, batch_size):
             elif li==1.:
                 pos.append(key)
                 
+        prompt = ""
+        for key in pos+neg:
+            prompt += key + " . "
+        prompt = prompt.strip()
+                
+        BOX_TRESHOLD = 0.35
+        TEXT_TRESHOLD = 0.25
+       
+
+        # Get predicted bbox
+        pred_bboxs, logits = my_groundingdino.inference(
+            image_path=[image_paths[b]],
+            caption=[prompt],
+            box_threshold=BOX_TRESHOLD,
+            text_threshold=TEXT_TRESHOLD,
+        )       
+               
         b_loss = 0
-        # Positive
-        pred_bboxs, logits = my_groundingdino.predict([image_paths[b]], [(pos+neg)[0]], box_threshold=0.0)
-        pdb.set_trace()
-        for c in pos:
-            
-            b_loss += torch.nn.BCEWithLogitsLoss()(logits, torch.tensor([1.]).to(my_groundingdino.device))
+               
+        for i, c in enumerate(pos):
+            b_loss += torch.nn.BCEWithLogitsLoss()(logits[0][i:i+1], torch.tensor([1.]).to(my_groundingdino.device))
         
         # Negative
-        for c in neg:
-            pred_bboxs, logits = my_groundingdino.predict([image_paths[b]], [c], box_threshold=0.0)
-            b_loss += torch.nn.BCEWithLogitsLoss()(logits, torch.tensor([0.]).to(my_groundingdino.device))
+        for i, c in enumerate(neg):
+            b_loss += torch.nn.BCEWithLogitsLoss()(logits[0][i+len(pos):i+len(pos)+1], torch.tensor([0.]).to(my_groundingdino.device))
         
         loss += b_loss / len(pos+neg)
     
@@ -340,65 +362,86 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
     l1_loss_fn = nn.L1Loss(reduction="none")
 
     # Load data
-    image_paths = data["image_path"]
-    labels = data["label"]
-    for i in range(len(labels)):
-        labels[i] = f"{labels[i]}"
-    gt_bboxs = data["bbox"].to(my_groundingdino.device)
+    image_paths = [item["image_path"] for item in data]
+    
+    def get_prompt(labels):
+        keys = list(labels.keys())
+        prompt = ""
+        for key in keys:
+            prompt += key + " . "
+        return prompt.strip()
+    
+    prompts = [get_prompt(item["labels"]) for item in data]
+    # labels = data["label"]
+        
+    # for i in range(len(labels)):
+    #     labels[i] = f"{labels[i]}"
+    # gt_bboxs = data["bbox"].to(my_groundingdino.device)
     
     # Predict bounding box
-    pred_bboxs, logits = my_groundingdino.forward(image_paths, labels)
+    
 
     # Compute loss
     total_loss = 0
-    B = gt_bboxs.shape[0]
+    B = len(image_paths)
+    # pred_bboxs is a list (length B) tensors, each tensor is shaped (num_prompts, 4)
+    pred_bboxs, logits = my_groundingdino.inference(image_paths, 
+                                                    prompts, 
+                                                    box_threshold=0.35,
+                                                    text_threshold=0.25,)
+    
     for b in range(B):
+       
+        # print(pred_bboxs[b].shape)
+        # print(data[b]["labels"])
         # Filter for valid gt bboxs
-        gt_bboxs_target = gt_bboxs[b][gt_bboxs[b][:, 0] != -1]
+        for i, p in enumerate(data[b]["labels"]):
+            gt_bboxs_target = torch.tensor(data[b]["labels"][p], device='cuda')
+            # pdb.set_trace()
+            
+            # Compute IoU between each pred_bbox and each gt_bbox
+            ious = ops.box_iou(pred_bboxs[b][i].unsqueeze(0), gt_bboxs_target)
+            ious, gt_indices = ious.max(dim=1) # max iou overlap for each predicted bbox
 
-        # Compute IoU between each pred_bbox and each gt_bbox
-        ious = ops.box_iou(pred_bboxs[b], gt_bboxs_target)
-        ious, gt_indices = ious.max(dim=1) # max iou overlap for each predicted bbox
+            # Compute binary classification loss
+            gt_label = ious > iou_thres
+            if gt_label.sum() == 0: # Pick top prediction if no box > threshold
+                max_iou, max_idx = ious.max(dim=0)
+                gt_label[max_idx] = 1
+            obj_loss = obj_loss_fn(logits[b][i].unsqueeze(0), gt_label.float())
 
-        # Compute binary classification loss
-        gt_label = ious > iou_thres
-        if gt_label.sum() == 0: # Pick top prediction if no box > threshold
-            max_iou, max_idx = ious.max(dim=0)
-            gt_label[max_idx] = 1
-        obj_loss = obj_loss_fn(logits[b], gt_label.float())
+            # Comput regression loss
+            gt_bboxs_target = gt_bboxs_target[gt_indices]
+            giou_loss = ops.generalized_box_iou_loss(gt_bboxs_target, pred_bboxs[b][i].unsqueeze(0), reduction="none")
+            l1_loss = l1_loss_fn(gt_bboxs_target, pred_bboxs[b][i].unsqueeze(0)).mean(dim=1) / 256 # normalize by image size
+            reg_loss = (gt_label.float() * (2.0 * giou_loss + 5.0 * l1_loss)).sum() / gt_label.sum()
 
-        # Comput regression loss
-        gt_bboxs_target = gt_bboxs_target[gt_indices]
-        giou_loss = ops.generalized_box_iou_loss(gt_bboxs_target, pred_bboxs[b], reduction="none")
-        l1_loss = l1_loss_fn(gt_bboxs_target, pred_bboxs[b]).mean(dim=1) / 256 # normalize by image size
-        reg_loss = (gt_label.float() * (2.0 * giou_loss + 5.0 * l1_loss)).sum() / gt_label.sum()
-
-        # Compute total loss
-        total_loss += 2.0 * obj_loss + reg_loss
+            # Compute total loss
+            total_loss += 2.0 * obj_loss + reg_loss
     
 
-    if viz:
-        # Get prediction with highest logits for the last sample
-        b = B - 1
-        best_logit, best_idx = logits[b].max(dim=0)
-        bbox = pred_bboxs[b][best_idx]   
-        bbox2 = gt_bboxs_target[best_idx]
+    # if viz:
+    #     # Get prediction with highest logits for the last sample
+    #     b = B - 1
+    #     best_logit, best_idx = logits[b].max(dim=0)
+    #     bbox = pred_bboxs[b][best_idx]   
+    #     bbox2 = gt_bboxs_target[best_idx]
         
-        # Draw on image
-        img = cv2.imread(image_paths[b])
-        start_point = (int(bbox[0]), int(bbox[1]))
-        end_point = (int(bbox[2]), int(bbox[3]))
-        cv2.rectangle(img, start_point, end_point, color=(0,0,255), thickness=4) # red for prediction
-        cv2.rectangle(img, (int(bbox2[0]), int(bbox2[1])), (int(bbox2[2]), int(bbox2[3])), color=(0,255,0), thickness=4) # green for gt
+    #     # Draw on image
+    #     img = cv2.imread(image_paths[b])
+    #     start_point = (int(bbox[0]), int(bbox[1]))
+    #     end_point = (int(bbox[2]), int(bbox[3]))
+    #     cv2.rectangle(img, start_point, end_point, color=(0,0,255), thickness=4) # red for prediction
+    #     cv2.rectangle(img, (int(bbox2[0]), int(bbox2[1])), (int(bbox2[2]), int(bbox2[3])), color=(0,255,0), thickness=4) # green for gt
         
-        # Save and log
-        cv2.imwrite(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg", img)
-        if log_to_wandb:
-            images = wandb.Image(
-                Image.open(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg"), 
-                caption=f"{labels[b]}_step_{step}"
-            )
-            wandb.log({"pascal_images": images})
+    #     # Save and log
+    #     cv2.imwrite(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg", img)
+    #     if log_to_wandb:
+    #         images = wandb.Image(
+    #             Image.open(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg"), 
+    #             caption=f"{labels[b]}_step_{step}"
+    #         )
+    #         wandb.log({"pascal_images": images})
 
     return total_loss / B
 
@@ -425,9 +468,9 @@ def save_viz(my_groundingdino, step, log_to_wandb=False):
     labels = [query]
     
     # Predict bounding box
-    pred_bboxs, logits = my_groundingdino.predict(image_paths, labels, box_threshold=0.0)
-    bbox = pred_bboxs[0]
-
+    pred_bboxs, logits, _ = my_groundingdino.predict(image_paths, labels, box_threshold=0.0)
+    bbox = pred_bboxs[0][0]
+    
     # Draw predicted bbox
     img = cv2.imread(image_paths[0])
     start_point = (int(bbox[0]), int(bbox[1]))
