@@ -28,7 +28,7 @@ from transformers import SamProcessor
 from info_nce import InfoNCE
 
 from evaluation import eval_results
-from utils import PROMPTS
+from utils import PROMPTS, explore_tensor
 
 from model import myGroundingDino, myBiomedCLIP, mySAM, myBioViL
 from dataset_mimic import load_data as load_mimic
@@ -138,12 +138,11 @@ def train(hyperparams):
             reports = data["report"]
 
             # Compute adaptation loss on medical data (target domain)
-            # start_time = time.time()
+            print("in train")
+            pdb.set_trace()
             groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss = compute_adaptation_loss(
                 image_paths, reports, my_groundingdino, my_biovil, my_sam,
             )
-            # end_time = time.time()
-            # print(f'Time taken: {end_time - start_time} seconds')
 
             # Compute adaptation loss on pascal data (source domain)
             # groundingdino_img_loss_s, groundingdino_txt_loss_s, groundingdino_img_txt_loss_s, sam_img_loss_s = compute_adaptation_loss_pascal(
@@ -151,28 +150,23 @@ def train(hyperparams):
             # )
             
             # Compute detection loss
-            # start_time = time.time()
             if i % log_image_every == 0:
                 loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, viz=True, log_to_wandb=log_to_wandb)
             else:
                 loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
-            # end_time = time.time()
-            # print(f'Time taken: {end_time - start_time} seconds')
             
             # # start_time = time.time()
             # loss_classif = classification_loss(data, my_groundingdino, batch_size_seg)
             # end_time = time.time()
             # # print(f'Time taken: {end_time - start_time} seconds')
             
-            #+ groundingdino_img_loss_s + groundingdino_txt_loss_s
-            #groundingdino_img_txt_loss_s
             loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss ) \
                           + lambda_img_txt * (groundingdino_img_txt_loss ) \
                           + lambda_detection * loss_detection \
-                          + lambda_classif * loss_classif
+                        #   + lambda_classif * loss_classif
             
-            if i % log_image_every == 0:
-                save_viz(my_groundingdino, step=i, log_to_wandb=log_to_wandb)
+            # if i % log_image_every == 0:
+            #     save_viz(my_groundingdino, step=i, log_to_wandb=log_to_wandb)
             
             # Log to wandb
             if log_to_wandb:
@@ -329,8 +323,8 @@ def classification_loss(data, my_groundingdino, batch_size):
             prompt += key + " . "
         prompt = prompt.strip()
                 
-        BOX_TRESHOLD = 0.35
-        TEXT_TRESHOLD = 0.25
+        BOX_TRESHOLD = 0.05
+        TEXT_TRESHOLD = 0.05
        
 
         # Get predicted bbox
@@ -372,32 +366,23 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
         return prompt.strip()
     
     prompts = [get_prompt(item["labels"]) for item in data]
-    # labels = data["label"]
-        
-    # for i in range(len(labels)):
-    #     labels[i] = f"{labels[i]}"
-    # gt_bboxs = data["bbox"].to(my_groundingdino.device)
-    
-    # Predict bounding box
-    
 
     # Compute loss
     total_loss = 0
     B = len(image_paths)
+
     # pred_bboxs is a list (length B) tensors, each tensor is shaped (num_prompts, 4)
-    pred_bboxs, logits = my_groundingdino.inference(image_paths, 
-                                                    prompts, 
-                                                    box_threshold=0.35,
-                                                    text_threshold=0.25,)
-    
+    pred_bboxs, logits = my_groundingdino.inference(
+        image_paths, 
+        prompts, 
+        box_threshold=0.05,
+        text_threshold=0.05
+    )
+
     for b in range(B):
-       
-        # print(pred_bboxs[b].shape)
-        # print(data[b]["labels"])
         # Filter for valid gt bboxs
         for i, p in enumerate(data[b]["labels"]):
             gt_bboxs_target = torch.tensor(data[b]["labels"][p], device='cuda')
-            # pdb.set_trace()
             
             # Compute IoU between each pred_bbox and each gt_bbox
             ious = ops.box_iou(pred_bboxs[b][i].unsqueeze(0), gt_bboxs_target)
@@ -468,7 +453,7 @@ def save_viz(my_groundingdino, step, log_to_wandb=False):
     labels = [query]
     
     # Predict bounding box
-    pred_bboxs, logits, _ = my_groundingdino.predict(image_paths, labels, box_threshold=0.0)
+    pred_bboxs, logits, _ = my_groundingdino.inference(image_paths, labels, box_threshold=0.01, text_threshold=0.01)
     bbox = pred_bboxs[0][0]
     
     # Draw predicted bbox

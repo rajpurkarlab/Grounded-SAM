@@ -107,8 +107,8 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
             prompt += key + " . "
         prompt = prompt.strip()
         
-        BOX_TRESHOLD = 0.35
-        TEXT_TRESHOLD = 0.25
+        BOX_TRESHOLD = 0.05
+        TEXT_TRESHOLD = 0.05
 
         # Get predicted bbox
         boxes, _ = groundingdino.inference(
@@ -392,8 +392,8 @@ class UnitTest:
         # print("Starting Grounded-SAM, CheXlocalize...")
         # print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
-        # print("Starting Grounded-SAM, PASCAL...")
-        # print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
+        print("Starting Grounded-SAM, PASCAL...")
+        print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
         
         # print(eval_results("chexlocalize", "grounded-sam"))
         # print("Grounded-SAM, CheXlocalize adaptation only - 303: ", eval_results("chexlocalize", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
@@ -402,8 +402,8 @@ class UnitTest:
 
         # print("Grounded-SAM, PASCAL - 6565: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_6565.pth"))
         
-        print("Starting GD, CheXlocalize...")
-        print("GD, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
+        # print("Starting GD, CheXlocalize...")
+        # print("GD, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
         # print("Starting BioViL, CheXlocalize, GRADCAM=True...")
         # print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))

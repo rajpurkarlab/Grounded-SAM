@@ -32,6 +32,7 @@ import models.CheXzero.clip as clip
 from models.biovil import load_biovil_and_transform, remap_to_uint8
 
 from linear_probe import LinearProbe
+from utils import explore_tensor
 
 
 class myGroundingDino:
@@ -106,6 +107,10 @@ class myGroundingDino:
         """
         source_images, images = [], []
         for image_path in image_paths:
+            print(image_path)
+            if len(image_path) == 0 or type(image_path) == type(float("nan")):
+                print("here")
+                continue
             source_image, image = self.load_image(image_path)
             source_images.append(source_image)
             images.append(image)
@@ -119,7 +124,7 @@ class myGroundingDino:
         """Get image embedding for Grounding Dino."""
         # Preprocess
         _, img = self.preprocess_img(image_path)
-        
+
         # Run backbone
         backbone_output, _ = self.model.backbone(img)
         groundingdino_img_embedding = []
@@ -754,6 +759,8 @@ class myBioViL:
         # Preprocess images
         images = []
         for image_path in image_paths:
+            if len(image_path) == 0 or type(image_path) == type(float("nan")):
+                continue
             img = Image.open(image_path).convert("RGB")
             img = np.array(img)
             img = remap_to_uint8(img)
@@ -761,12 +768,16 @@ class myBioViL:
             img = self.transform(img).to(self.device)
             images.append(img)
         images = torch.stack(images)
+
+        print("in biovil")
+        pdb.set_trace()
         return images
 
     
     def get_local_img_emb(self, image_paths):
         """Get localized image embedding for BioViL."""
         images = self.preprocess_img(image_paths)
+
         img_embedding = self.model.image_inference_engine.get_patchwise_projected_embeddings(
             images, normalize=True
         )
