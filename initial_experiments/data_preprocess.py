@@ -22,49 +22,66 @@ import torchvision
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 
 from models.biovil import load_biovil_and_transform, remap_to_uint8
+import torchvision.datasets as datasets
 
 
-def img_to_hdf5(csv_path, img_dir, out_filepath, resolution_gd=256): 
+def get_image_paths_mimic(csv_path, img_dir, top_k=None):
+    """Get the list of image paths for MIMIC."""
+    # Load dataframe from csv file
+    dataframe = pd.read_csv(csv_path)
+
+    # Get image paths
+    image_paths = []
+    for idx in range(len(dataframe)):
+        # Get data from dataframe
+        row = dataframe.iloc[idx]
+        dicom_id = row['dicom_id']
+        study_id = row['study_id']
+        subject_id = row['subject_id']
+        image_path = f'{img_dir}/p{str(subject_id)[0:2]}/p{subject_id}/s{study_id}/{dicom_id}.jpg'
+        image_paths.append(image_path)
+
+        if top_k is not None and idx == top_k:
+            break
+
+    return image_paths
+
+
+def get_image_paths_pascal(root, year='2012', image_set='train'):
+    """Get the list of image paths for PASCAL."""
+    pascal = datasets.VOCDetection(
+        root, 
+        year=year, 
+        image_set=image_set, 
+        download=False, 
+        transform=None, 
+        target_transform=None
+    )
+    return pascal.images
+
+
+def img_to_hdf5_general(image_path_list, out_filepath, resolution_gd=256, top_k=None): 
     """
     Convert directory of images into a .h5 file given paths to all 
     images. 
     """
-    # Load dataframe from csv file
-    dataframe = pd.read_csv(csv_path)
-
     # Load transforms for preprocessing
     transform_gd = preprocess_gd(resolution_gd)
     transform_biovil = preprocess_biovil()
 
     # Convert images to h5
     print("Convert images to h5...")
-    dset_size = len(dataframe)
+    dset_size = len(image_path_list)
     failed_images = []
 
     with h5py.File(out_filepath,'w') as h5f:
         # Initialize datasets
-        img_dset_gd = h5f.create_dataset('cxr_gd', shape=(dset_size, 3, resolution_gd, resolution_gd))  
-        img_dset_biovil = h5f.create_dataset('cxr_biovil', shape=(dset_size, 3, 448, 448))
-        report_dset = h5f.create_dataset('report', dtype=h5py.string_dtype(), shape=(dset_size,))
-        image_path_dset = h5f.create_dataset('image_path', dtype=h5py.string_dtype(), shape=(dset_size,))
+        img_dset_gd = h5f.create_dataset('img_gd', shape=(dset_size, 3, resolution_gd, resolution_gd))  
+        img_dset_biovil = h5f.create_dataset('img_biovil', shape=(dset_size, 3, 448, 448))
 
-        for idx in tqdm(range(len(dataframe))):
-            # Get data from dataframe
-            row = dataframe.iloc[idx]
-            dicom_id = row['dicom_id']
-            study_id = row['study_id']
-            subject_id = row['subject_id']
-            report = row['report']
-            image_path = f'{img_dir}/p{str(subject_id)[0:2]}/p{subject_id}/s{study_id}/{dicom_id}.jpg'
-
+        for idx, image_path in enumerate(tqdm(image_path_list)):
             # Save to dataset
             try: 
-                # Save report
-                report_dset[idx] = report
-
-                # Save image_path
-                image_path_dset[idx] = image_path
-
                 # Load image
                 image = Image.open(image_path).convert("RGB")
                 image = np.asarray(image)
@@ -83,46 +100,12 @@ def img_to_hdf5(csv_path, img_dir, out_filepath, resolution_gd=256):
 
             except Exception as e: 
                 failed_images.append((image_path, e))
+            
+            if top_k is not None and idx == top_k:
+                break
 
     print(failed_images)
     print(f"{len(failed_images)} / {dset_size} images failed to be added to h5.", failed_images)
-
-    # Filter problematic entries
-    print("Filtering problematic entries...")
-    with h5py.File(out_filepath,'r') as h5f:
-        # Get processed images
-        img_dset_gd = h5f['cxr_gd']
-        img_dset_biovil = h5f['cxr_biovil']
-        # Get report
-        report_dset = h5f['report']
-        # Get image path
-        image_path_dset = h5f['image_path']
-
-        # Get indices of problematic entries
-        indices = []
-        for idx in tqdm(range(len(dataframe))):
-            try:
-                img_dset_gd[idx]
-                img_dset_biovil[idx]
-                report_dset[idx]
-                image_path_dset[idx]
-            except Exception as e:
-                indices.append(idx)
-
-        # Filter out problematic entries
-        img_dset_gd = np.delete(img_dset_gd, indices, axis=0)
-        img_dset_biovil = np.delete(img_dset_biovil, indices, axis=0)
-        report_dset = np.delete(report_dset, indices, axis=0)
-        image_path_dset = np.delete(image_path_dset, indices, axis=0)
-    
-    # Save filtered data to h5
-    print("Saving filtered data to h5...")
-    with h5py.File(out_filepath,'w') as h5f:
-        # Initialize datasets
-        img_dset_gd = h5f.create_dataset('cxr_gd', data=img_dset_gd)  
-        img_dset_biovil = h5f.create_dataset('cxr_biovil', data=img_dset_biovil)
-        report_dset = h5f.create_dataset('report', data=report_dset)
-        image_path_dset = h5f.create_dataset('image_path', data=image_path_dset)
 
 
 def preprocess_gd(resolution_gd=256):
@@ -171,10 +154,16 @@ def filter_h5():
 
 
 if __name__ == "__main__":
-    # cvs_path = '/n/data1/hms/dbmi/rajpurkar/lab/CXR-ReDonE/data/mimic_train_impressions.csv'
-    # img_dir='/n/data1/hms/dbmi/rajpurkar/lab/datasets/cxr/MIMIC-CXR/raw_jpg/files'
+    cvs_path = '/n/data1/hms/dbmi/rajpurkar/lab/CXR-ReDonE/data/mimic_train_impressions.csv'
+    img_dir='/n/data1/hms/dbmi/rajpurkar/lab/datasets/cxr/MIMIC-CXR/raw_jpg/files'
+    h5_path_mimic = './initial_experiments/data/mimic.h5'
+    mimic_image_paths = get_image_paths_mimic(cvs_path, img_dir)
+    img_to_hdf5_general(mimic_image_paths, h5_path_mimic)
 
-    # h5_out_path = './initial_experiments/data/mimic.h5'
-    # img_to_hdf5(cvs_path, img_dir, h5_out_path)
+    # pascal_root = "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/"
+    # h5_path_pascal = './initial_experiments/data/pascal.h5'
+    # pascal_image_paths = get_image_paths_pascal(root=pascal_root)
+    # img_to_hdf5_general(pascal_image_paths, h5_path_pascal)
 
-    filter_h5()
+    # filter_h5()
+
