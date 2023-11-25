@@ -14,6 +14,7 @@ import pycocotools.mask as mask_util
 import json
 import pandas as pd
 import numpy as np
+import h5py
 import wandb
 from tqdm.auto import tqdm
 import torch
@@ -56,6 +57,8 @@ def train(hyperparams):
     lr = hyperparams['lr']
     batch_size_ada = hyperparams['batch_size_adaptation']
     batch_size_seg = hyperparams['batch_size_segmentation']
+    h5_file_mimic = hyperparams['h5_file_mimic']
+    h5_file_pascal = hyperparams['h5_file_pascal']
     lambda_detection = hyperparams['lambda_detection']
     lambda_img_txt = hyperparams['lambda_img_txt']
     lambda_adaptation = hyperparams['lambda_adaptation']
@@ -84,8 +87,8 @@ def train(hyperparams):
             )
 
     # Load data
-    mimic_dataloader = load_mimic(batch_size=batch_size_ada, tensor=False, num_workers=num_workers)
-    pascal_dataloader = load_pascal(batch_size=batch_size_seg, num_workers=num_workers)
+    mimic_dataloader = load_mimic(batch_size=batch_size_ada, h5_file=h5_file_mimic, num_workers=num_workers)
+    pascal_dataloader = load_pascal(batch_size=batch_size_seg, h5_file=h5_file_pascal, num_workers=num_workers)
     pascal_dataloader_iter = inf_data_gen(pascal_dataloader)
 
     # Load model
@@ -133,21 +136,15 @@ def train(hyperparams):
         for i, data in enumerate(tqdm(mimic_dataloader, desc=f'Training @ epoch {epoch+1} of {num_epochs}')):
             optimizer.zero_grad()
 
-            # Load data
-            image_paths = data["image_path"]
-            reports = data["report"]
-
             # Compute adaptation loss on medical data (target domain)
-            print("in train")
-            pdb.set_trace()
             groundingdino_img_loss, groundingdino_txt_loss, groundingdino_img_txt_loss, sam_img_loss = compute_adaptation_loss(
-                image_paths, reports, my_groundingdino, my_biovil, my_sam,
+                data, my_groundingdino, my_biovil, my_sam, on_dataset="mimic"
             )
 
             # Compute adaptation loss on pascal data (source domain)
-            # groundingdino_img_loss_s, groundingdino_txt_loss_s, groundingdino_img_txt_loss_s, sam_img_loss_s = compute_adaptation_loss_pascal(
-            #     next(pascal_dataloader_iter), my_groundingdino, my_biovil, my_sam,
-            # )
+            groundingdino_img_loss_s, groundingdino_txt_loss_s, groundingdino_img_txt_loss_s, sam_img_loss_s = compute_adaptation_loss(
+                next(pascal_dataloader_iter), my_groundingdino, my_biovil, my_sam, on_dataset="pascal"
+            )
             
             # Compute detection loss
             if i % log_image_every == 0:
@@ -161,12 +158,14 @@ def train(hyperparams):
             # # print(f'Time taken: {end_time - start_time} seconds')
             
             loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss ) \
-                          + lambda_img_txt * (groundingdino_img_txt_loss ) \
-                          + lambda_detection * loss_detection \
-                        #   + lambda_classif * loss_classif
+                        + lambda_img_txt * (groundingdino_img_txt_loss ) \
+                        + lambda_detection * loss_detection \
+                        + lambda_adaptation * (groundingdino_img_loss_s + groundingdino_txt_loss_s ) \
+                        + lambda_img_txt * (groundingdino_img_txt_loss_s ) \
+                        #   + lambda_classif * loss_classif 
             
-            # if i % log_image_every == 0:
-            #     save_viz(my_groundingdino, step=i, log_to_wandb=log_to_wandb)
+            if i % log_image_every == 0:
+                save_viz_chexlocalize(my_groundingdino, step=i, log_to_wandb=log_to_wandb)
             
             # Log to wandb
             if log_to_wandb:
@@ -175,10 +174,10 @@ def train(hyperparams):
                     "train/groundingdino_img_loss": groundingdino_img_loss,
                     "train/groundingdino_txt_loss": groundingdino_txt_loss,
                     "train/groundingdino_img_txt_loss": groundingdino_img_txt_loss,
-                    "train/classif_loss": loss_classif,
-                    # "train/groundingdino_img_loss_s": groundingdino_img_loss_s,
-                    # "train/groundingdino_txt_loss_s": groundingdino_txt_loss_s,
-                    # "train/groundingdino_img_txt_loss_s": groundingdino_img_txt_loss_s,
+                    # "train/classif_loss": loss_classif,
+                    "train/groundingdino_img_loss_s": groundingdino_img_loss_s,
+                    "train/groundingdino_txt_loss_s": groundingdino_txt_loss_s,
+                    "train/groundingdino_img_txt_loss_s": groundingdino_img_txt_loss_s,
                     "train/loss_detection": loss_detection,
                     "train/learning_rate": scheduler.get_last_lr()[0],
                 })
@@ -212,18 +211,18 @@ def train(hyperparams):
 
                 iou_chex = eval_results("chexlocalize", "grounded-sam", save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth")
 
-                auc_chexpert = eval_results(
-                    "chexpert", "grounded-sam",
-                    ckpt_file = save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth", 
-                    ckpt_img_linear = save_folder + f"initial_experiments_groundingdino_img_linear_{i}.pth",
-                    ckpt_txt_linear = save_folder + f"initial_experiments_groundingdino_txt_linear_{i}.pth",
-                )
+                # auc_chexpert = eval_results(
+                #     "chexpert", "grounded-sam",
+                #     ckpt_file = save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth", 
+                #     ckpt_img_linear = save_folder + f"initial_experiments_groundingdino_img_linear_{i}.pth",
+                #     ckpt_txt_linear = save_folder + f"initial_experiments_groundingdino_txt_linear_{i}.pth",
+                # )
 
                 if log_to_wandb:
                     wandb.log({
                         "val/iou_pascal": iou_pascal, 
                         "val/iou_chex": iou_chex,
-                        "val/auc_chexpert": auc_chexpert,
+                        # "val/auc_chexpert": auc_chexpert,
                         })
 
     # Finish wandb session
@@ -240,34 +239,27 @@ def inf_data_gen(dataloader):
             yield data
 
 
-def compute_adaptation_loss_pascal(data, my_groundingdino, my_biovil, my_sam):
-    """Compute adaptation loss between grounding dino and biomedclip + between sam and biovil.
-
-    This is analogous to compute_adaptation_loss, but for pascal dataset.
-    """
-    # Load data
-    image_paths = data["image_path"]
-    labels = data["label"]
-    for i in range(len(labels)):
-        labels[i] = f"{labels[i]}"
-
-    # Compute loss with helper function
-    return compute_adaptation_loss(image_paths, labels, my_groundingdino, my_biovil, my_sam)
-
-
-def compute_adaptation_loss(image_paths, reports, my_groundingdino, my_biovil, my_sam):
+def compute_adaptation_loss(data, my_groundingdino, my_biovil, my_sam, on_dataset="mimic"):
     """Compute adaptation loss between grounding dino and biomedclip + between sam and biovil.
     
     Loss function: cosine similarity between embeddings if SAM is activated, InfoNCE loss if SAM is not activated.
     """
+    # Load data
+    image_gd = data["image_gd"].to(my_groundingdino.device)
+    image_biovil = data["image_biovil"].to(my_biovil.device)
+    if on_dataset=="mimic":
+        reports = data["report"]
+    elif on_dataset=="pascal":
+        reports = [get_prompt(item) for item in data["labels"]]
+
     # Get embeddings
-    groundingdino_img_emb = my_groundingdino.get_img_emb(image_paths)
+    groundingdino_img_emb = my_groundingdino.get_img_emb(image_gd)
     groundingdino_img_emb = my_groundingdino.align_img_emb(groundingdino_img_emb)
     groundingdino_txt_emb = my_groundingdino.get_txt_emb(reports)
     groundingdino_txt_emb = my_groundingdino.align_txt_emb(groundingdino_txt_emb)
 
-    with torch.no_grad(): # BiomedCLIP is kept frozen
-        medical_img_embedding = my_biovil.get_img_emb(image_paths)
+    with torch.no_grad(): # medical model is frozen
+        medical_img_embedding = my_biovil.get_img_emb(image_biovil)
         medical_txt_embedding = my_biovil.get_txt_emb(reports)
     
     if my_sam:
@@ -349,6 +341,22 @@ def classification_loss(data, my_groundingdino, batch_size):
     return loss
 
 
+def get_prompt(labels):
+    """Get prompt for Grounding Dino.
+    
+    Args:
+        - labels: dict of {phrase: label} pairs.
+    
+    Returns:
+        - prompt: string of prompt.
+    """
+    keys = list(labels.keys())
+    prompt = ""
+    for key in keys:
+        prompt += key + " . "
+    return prompt.strip()
+
+
 def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=False, log_to_wandb=False):
     """Compute detection loss."""
     # Define loss function
@@ -356,34 +364,30 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
     l1_loss_fn = nn.L1Loss(reduction="none")
 
     # Load data
-    image_paths = [item["image_path"] for item in data]
-    
-    def get_prompt(labels):
-        keys = list(labels.keys())
-        prompt = ""
-        for key in keys:
-            prompt += key + " . "
-        return prompt.strip()
-    
-    prompts = [get_prompt(item["labels"]) for item in data]
+    image_paths = data["image_path"]
+    images = data["image_gd"].to(my_groundingdino.device)
+    original_img_size = data["original_img_size"]    
+    prompts = [get_prompt(item) for item in data["labels"]]
+    labels = data["labels"]
 
     # Compute loss
     total_loss = 0
-    B = len(image_paths)
+    B = len(images)
 
     # pred_bboxs is a list (length B) tensors, each tensor is shaped (num_prompts, 4)
     pred_bboxs, logits = my_groundingdino.inference(
-        image_paths, 
+        images, 
         prompts, 
+        original_img_size,
         box_threshold=0.05,
         text_threshold=0.05
     )
 
     for b in range(B):
         # Filter for valid gt bboxs
-        for i, p in enumerate(data[b]["labels"]):
-            gt_bboxs_target = torch.tensor(data[b]["labels"][p], device='cuda')
-            
+        for i, p in enumerate(labels[b]):
+            gt_bboxs_target = torch.tensor(labels[b][p], device='cuda')
+
             # Compute IoU between each pred_bbox and each gt_bbox
             ious = ops.box_iou(pred_bboxs[b][i].unsqueeze(0), gt_bboxs_target)
             ious, gt_indices = ious.max(dim=1) # max iou overlap for each predicted bbox
@@ -405,41 +409,44 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
             total_loss += 2.0 * obj_loss + reg_loss
     
 
-    # if viz:
-    #     # Get prediction with highest logits for the last sample
-    #     b = B - 1
-    #     best_logit, best_idx = logits[b].max(dim=0)
-    #     bbox = pred_bboxs[b][best_idx]   
-    #     bbox2 = gt_bboxs_target[best_idx]
+    if viz:
+        # Get prediction with highest logits for the last sample
+        b = B - 1
+        bbox = pred_bboxs[b][-1]
+        bbox2 = gt_bboxs_target[0]
+
+        # Draw on image
+        img = cv2.imread(image_paths[b])
+        cv2.rectangle(img, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), color=(0,0,255), thickness=4) # red for prediction
+        cv2.rectangle(img, (int(bbox2[0]), int(bbox2[1])), (int(bbox2[2]), int(bbox2[3])), color=(0,255,0), thickness=4) # green for gt
         
-    #     # Draw on image
-    #     img = cv2.imread(image_paths[b])
-    #     start_point = (int(bbox[0]), int(bbox[1]))
-    #     end_point = (int(bbox[2]), int(bbox[3]))
-    #     cv2.rectangle(img, start_point, end_point, color=(0,0,255), thickness=4) # red for prediction
-    #     cv2.rectangle(img, (int(bbox2[0]), int(bbox2[1])), (int(bbox2[2]), int(bbox2[3])), color=(0,255,0), thickness=4) # green for gt
-        
-    #     # Save and log
-    #     cv2.imwrite(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg", img)
-    #     if log_to_wandb:
-    #         images = wandb.Image(
-    #             Image.open(f"./initial_experiments/images/{labels[b]}_step_{step}.jpg"), 
-    #             caption=f"{labels[b]}_step_{step}"
-    #         )
-    #         wandb.log({"pascal_images": images})
+        # Save and log
+        logit_str = str(logits[b][0].tolist())[:4]
+        cv2.imwrite(f"./initial_experiments/images/{prompts[b]}_{logit_str}_step_{step}.jpg", img)
+        if log_to_wandb:
+            images = wandb.Image(
+                Image.open(f"./initial_experiments/images/{prompts[b]}_{logit_str}_step_{step}.jpg"), 
+                caption=f"{prompts[b]}_{logit_str}_step_{step}"
+            )
+            wandb.log({"pascal_images": images})
 
     return total_loss / B
 
 
 
-def save_viz(my_groundingdino, step, log_to_wandb=False):
+def save_viz_chexlocalize(my_groundingdino, step, log_to_wandb=False):
     """Visualization for CheXlocalize."""
     # Randomly choose an image
     json_obj = json.load(open("datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"))
+    h5_file = './initial_experiments/data/chexlocalize.h5'
     b = random.randint(0, len(json_obj)-1)
     obj = list(json_obj.keys())[b]
     filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
     image_paths = [filename]
+    with h5py.File(h5_file, "r") as h5f:
+        image_gd = h5f['img_gd'][b]
+        original_img_size = h5f['img_size'][b]
+    image_gd = torch.from_numpy(image_gd).unsqueeze(0).to(my_groundingdino.device)
     
     # Choose a disease
     for query in json_obj[obj]:
@@ -448,12 +455,9 @@ def save_viz(my_groundingdino, step, log_to_wandb=False):
             mask = mask_util.decode(annots)
             if mask.max() > 0: 
                 break
-     
-    # labels = [PROMPTS[query]]
-    labels = [query]
     
     # Predict bounding box
-    pred_bboxs, logits, _ = my_groundingdino.inference(image_paths, labels, box_threshold=0.01, text_threshold=0.01)
+    pred_bboxs, logits = my_groundingdino.inference(image_gd, [query], [original_img_size], box_threshold=0.01, text_threshold=0.01)
     bbox = pred_bboxs[0][0]
     
     # Draw predicted bbox
@@ -477,7 +481,7 @@ def save_viz(my_groundingdino, step, log_to_wandb=False):
     if log_to_wandb:
         images = wandb.Image(
             Image.open(f"./initial_experiments/images/{query}_step_{step}.jpg"), 
-            caption=f"{labels[0]}_step_{step}"
+            caption=f"{query}_step_{step}"
         )
         wandb.log({"chex_images": images})
 
@@ -565,6 +569,8 @@ class UnitTest:
             "lr": 1e-4,
             "batch_size_adaptation": 16,
             "batch_size_segmentation": 16,
+            "h5_file_mimic": "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/data/mimic.h5",
+            "h5_file_pascal": "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/data/pascal_train.h5",
             "lambda_detection": 8,
             "lambda_img_txt": 2,
             "lambda_adaptation": 1,
@@ -572,11 +578,11 @@ class UnitTest:
             "num_epochs": 3,
             "num_workers": 4,
             "use_sam": False,
-            "save_every": 100,
-            "log_image_every": 20,
+            "save_every": 1000,
+            "log_image_every": 100,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
-            "log_to_wandb": False,
+            "log_to_wandb": True,
         }
         train(hyperparams)
         

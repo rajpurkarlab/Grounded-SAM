@@ -73,3 +73,13 @@ def get_iou(pred_mask, gt_mask):
     union = np.logical_or(pred_mask, gt_mask)
     iou_score = np.sum(intersection) / np.sum(union)
     return iou_score
+
+def explore_tensor(tensor):
+    """Explore a tensor's shape, mean, std, min, max."""
+    print("-----------------------")
+    print("Shape:", tensor.shape)
+    print("Mean:", tensor.mean())
+    print("Std:", tensor.std())
+    print("Min:", tensor.min())
+    print("Max:", tensor.max())
+    print("----------------------")

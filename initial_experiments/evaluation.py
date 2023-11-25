@@ -18,6 +18,7 @@ import matplotlib.cm as cm
 import time
 
 import json
+import h5py
 from uuid import uuid4
 import pycocotools.mask as mask_util
 import argparse
@@ -58,6 +59,7 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
     class_name_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/class_names.txt'
     img_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages'
     gt_folder_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/SegmentationClass'
+    h5_file = './initial_experiments/data/pascal_val.h5'
 
     # Load class names
     class_names = []
@@ -92,7 +94,7 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
 
     # Evaluation
     iou_results = {class_name: [] for class_name in class_names}
-    for id in tqdm(val_ids):
+    for idx, id in enumerate(tqdm(val_ids)):
         # load image
         img_path = img_folder_path + '/' + id + '.jpg'
 
@@ -106,14 +108,21 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
         for key in keys:
             prompt += key + " . "
         prompt = prompt.strip()
+
+        with h5py.File(h5_file,'r') as h5f:
+            # Get processed images
+            image_gd = h5f['img_gd'][idx]
+            original_img_size = h5f["img_size"][idx]
+        image_gd = torch.from_numpy(image_gd).unsqueeze(0).to("cuda")
         
         BOX_TRESHOLD = 0.05
         TEXT_TRESHOLD = 0.05
 
         # Get predicted bbox
         boxes, _ = groundingdino.inference(
-            image_path=[img_path],
+            image=image_gd,
             caption=[prompt],
+            original_img_size=[original_img_size],
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
         )
@@ -167,7 +176,6 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
         if use_sam:
             sam = build_sam_vit_l(
                 checkpoint="./initial_experiments/ckpts/sam_vit_l_0b3195.pth",
-                # checkpoint="./initial_experiments/ckpts/initial_experiments_sam_1000.pth",
             ).to("cuda")
             sam_predictor = SamPredictor(sam)
     elif model == "biovil":
@@ -177,13 +185,12 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
 
     # Load CheXlocalize test set
     json_obj = json.load(open("datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"))
+    h5_file = './initial_experiments/data/chexlocalize.h5'
 
     iou_results = {prompt: [] for prompt in PROMPTS}
     # Loop through all test samples (pathology, image, ground-truth mask) tuples
-    for obj in tqdm(json_obj):
+    for idx, obj in enumerate(tqdm(json_obj)):
         filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
-
-        curr_time = time.time()
         
         # Filter out phrases that are not in PROMPTS and empty masks
         keys = list(json_obj[obj].keys())
@@ -214,10 +221,17 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
         BOX_TRESHOLD = 0.05
         TEXT_TRESHOLD = 0.05
 
+        with h5py.File(h5_file,'r') as h5f:
+            # Get processed images
+            image_gd = h5f['img_gd'][idx]
+            original_img_size = h5f["img_size"][idx]
+        image_gd = torch.from_numpy(image_gd).unsqueeze(0).to("cuda")
+
         # Get predicted bbox
         boxes, _ = groundingdino.inference(
-            image_path=[filename],
+            image=image_gd,
             caption=[prompt],
+            original_img_size=[original_img_size],
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
         )

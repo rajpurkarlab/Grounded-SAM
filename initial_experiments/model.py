@@ -33,6 +33,9 @@ from models.biovil import load_biovil_and_transform, remap_to_uint8
 
 from linear_probe import LinearProbe
 from utils import explore_tensor
+from dataset_mimic import load_data as load_mimic
+from dataset_pascal import load_data as load_pascal
+
 
 
 class myGroundingDino:
@@ -81,43 +84,15 @@ class myGroundingDino:
             self.txt_linear.load_state_dict(torch.load(txt_linear_ckpt, map_location=device))
 
 
-    def load_image(self, image_path: str):
-        """Load image for Grounding Dino.
-        
-        Helper function for preprocess_img, lightly adopted from Grounding Dino codebase and removed the center crop.
-        """
-        transform = torchvision.transforms.Compose([
-                # T.RandomResize([800], max_size=1333),
-                # S.CenterCrop(800),
-                torchvision.transforms.ToTensor(),
-                torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-                torchvision.transforms.Resize((256, 256)),
-        ])
-        image_source = Image.open(image_path).convert("RGB")
-        image = np.asarray(image_source)
-        image_transformed = transform(image_source)
-        return image, image_transformed
-
-
-    def preprocess_img(self, image_paths):
+    def preprocess_img(self, images):
         """Preprocess image for Grounding Dino.
         
         Inputs:
-            - image_paths: list of image paths
+            - images: tensor of shape (B, C, H, W)
         """
-        source_images, images = [], []
-        for image_path in image_paths:
-            print(image_path)
-            if len(image_path) == 0 or type(image_path) == type(float("nan")):
-                print("here")
-                continue
-            source_image, image = self.load_image(image_path)
-            source_images.append(source_image)
-            images.append(image)
-
         # Convert tensor to nested tensor
         images = nested_tensor_from_tensor_list(images).to(self.device)
-        return source_images, images.to(self.device)
+        return None, images.to(self.device)
     
 
     def get_img_emb(self, image_path):
@@ -176,143 +151,36 @@ class myGroundingDino:
         """Align text embedding to 512."""
         groundingdino_txt_embedding = self.txt_linear([groundingdino_txt_embedding])
         return groundingdino_txt_embedding
-    
-
-    def predict(self, image_path, caption, box_threshold: float, gt_boxes=None, k=10, text_threshold = 0.25):  
-        """Get predicted bounding box and confidence score for Grounding Dino.
-
-        box_threshold is currently not used, as the box with the highest threshold is always selected.
-        
-        When gt_boxes is give, we will output top k prediction based on iou.
-        """
-        B = len(image_path)
-
-        # Prepare images
-        source_image, image = self.preprocess_img(image_path)
-        caption = [preprocess_caption(c) for c in caption]
-
-        # Get prediction
-        outputs = self.model(image, captions=caption)
-        prediction_logits = outputs["pred_logits"].sigmoid()  # prediction_logits.shape = (B, nq, 256)
-        prediction_boxes = outputs["pred_boxes"]  # prediction_boxes.shape = (B, nq, 4)
-
-        # Resize boxes from [0, 1] to original dimension of the image
-        for i in range(B):
-            h, w, _ = source_image[i].shape
-            prediction_boxes[i] = prediction_boxes[i] * torch.Tensor([w, h, w, h]).to(self.device)
-        prediction_boxes = box_convert(boxes=prediction_boxes, in_fmt="cxcywh", out_fmt="xyxy")
-        
-        if gt_boxes is not None:
-            # Rank with boxes by IoU with grouth truth boxes
-            ious = torch.stack([box_iou(gt.unsqueeze(0), pred) for gt, pred in zip(gt_boxes, prediction_boxes)])
-            ious = ious.squeeze().clip(0)
-            values, indices = torch.sort(ious, dim=-1, descending=True)
-
-            # Filter for top k boxes
-            boxes = torch.stack([torch.index_select(pred, 0, ind) for pred, ind in zip(prediction_boxes, indices)])
-            logits = torch.stack([torch.index_select(pred, 0, ind) for pred, ind in zip(prediction_logits, indices)])
-            logits = logits.max(dim=2)[0]
-        else:
-            # Filter for the highest confidence box
-            # mask = prediction_logits.max(dim=2)[0] == prediction_logits.max(dim=2)[0].max(dim=1)[0].unsqueeze(1) # mask.shape = (B, n)
-           
-            mask = prediction_logits.max(dim=2)[0] > 0.0
-            # pdb.set_trace()
-            # raise Exception()
-            
-        
-            boxes = prediction_boxes # [mask]  # boxes.shape = (B, 4)
-            logits = prediction_logits # [mask]  # logits.shape = (B, 256)
-            # print(B, boxes.shape, logits.shape)
-            # logits = logits.max(dim=1)[0]
-            # print(B, boxes.shape, logits.shape)
-            # raise Exception()
-
-        # Tokenize caption
-        tokenizer = self.model.tokenizer
-        tokenized = tokenizer(caption)
-
-        # Separate tokenized into single samples
-        tokenized_samples = [{} for _ in range(B)]
-        for key, val in tokenized.items():
-            for b in range(B):
-                tokenized_samples[b][key] = val[b]
-
-        pdb.set_trace()
-                
-        if True:
-            PHRASES = []
-            for b in range(B):
-                sep_idx = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
-                
-                phrases = []
-                for logit in logits[b]:
-                    max_idx = logit.argmax()
-                    insert_idx = bisect.bisect_left(sep_idx, max_idx)
-                    right_idx = sep_idx[insert_idx]
-                    left_idx = sep_idx[insert_idx - 1]
-                    phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
-                PHRASES.append(phrases)
-        # pdb.set_trace()
-        
-        new_boxes = []
-        new_logits = []
-        for b in range(B):
-            phrases = [string for index, string in enumerate(PHRASES[b]) if string != ""]
-            f = [index for index, string in enumerate(PHRASES[b]) if string != ""]
-            # pdb.set_trace()
-            # new_boxes.append(boxes[b][f])
-            # new_logits.append(logits[b][f])
-            PHRASES[b] = phrases
-            try:
-                mask = logits[b][f].max(dim=1)[0] == logits[b][f].max(dim=1)[0].max(dim=0)[0] # mask.shape = (B, n)
-                new_boxes.append(boxes[b][f][mask])
-                new_logits.append(logits[b][f][mask])
-            except:
-                new_boxes.append(torch.zeros((1,4)))
-                new_logits.append(torch.zeros((1,256)))
-            # pdb.set_trace()
-        
-        boxes = torch.stack(new_boxes)
-        logits = torch.stack(new_logits)
-        # print(boxes.shape)
-        
-        # boxes= boxes[mask]
-        # logits=logits[mask]
-        logits = logits.max(dim=1)[0]
-        
-        # pdb.set_trace()
-        
-        return boxes, logits, PHRASES
 
 
     def inference(
         self,
-        image_path,
+        image,
         caption,
-        box_threshold, # not used
+        original_img_size,
+        box_threshold,
         text_threshold,
     ):
         """Open-vocabulary phrase grounding using Grounding Dino during inference.
 
         Args:
-            - image_path: list of string image paths.
+            - image: tensor of shape (B, C, H, W).
             - caption: list of string captions.
+            - original_img_size: list of tuple of (H, W) of original image size.
             - box_threshold: float, threshold for box confidence score.
             - text_threshold: float, threshold for text confidence score.
 
         Returns:
             - boxes: list of predicted bounding boxes.
-                - boxes.length = image_path.length
+                - boxes.length = image.length
                 - boxes[i] has shape (n_i, 4).
                 - n_i is different for each boxes[i] due to filtering.
             - logits: list of predicted text confidence scores.
             - phrases: list of predicted phrases.
         """
-        B = len(image_path)
+        B = len(image)
 
         # Prepare images and text
-        source_image, image = self.preprocess_img(image_path)
         caption = [preprocess_caption(c) for c in caption]
 
         # Get prediction
@@ -322,7 +190,7 @@ class myGroundingDino:
         
         # Resize boxes from [0, 1] to original dimension of the image
         for i in range(B):
-            h, w, _ = source_image[i].shape
+            h, w = original_img_size[i]
             prediction_boxes[i] = prediction_boxes[i] * torch.Tensor([w, h, w, h]).to(self.device)
         prediction_boxes = box_convert(boxes=prediction_boxes, in_fmt="cxcywh", out_fmt="xyxy")
 
@@ -390,72 +258,6 @@ class myGroundingDino:
 
         return new_boxes, [logit.max(dim=1)[0] for logit in new_logits]
         
-
-    def forward(
-        self,
-        image_path,
-        caption,
-    ):  
-        """Open-vocabulary phrase grounding using Grounding Dino during training.
-
-        Achieves the same functionality as inference when setting box_threshold to 0.0.
-        This implement is faster since we know the bboxs of every sample have the same dimension,
-        we can replace tensor operation and
-
-        Args:
-            - image_path: list of string image paths.
-            - caption: list of string captions.
-            - box_threshold: float, threshold for box confidence score.
-            - text_threshold: float, threshold for text confidence score.
-
-        Returns:
-            - boxes: tensor, predicted bounding boxes of shape (B, 900, 4).
-            - logits: tensor, predicted text confidence scores of shape (B, 900, 256).
-            - phrases: tensor, predicted phrases of shape (B, 900).
-        """
-        B = len(image_path)
-
-        # Prepare images and text
-        source_image, image = self.preprocess_img(image_path)
-        caption = [preprocess_caption(c) for c in caption]
-
-        # Get prediction
-        outputs = self.model(image, captions=caption)
-        logits = outputs["pred_logits"].sigmoid()  # prediction_logits.shape = (B, nq, 256), where nq = 900
-        boxes = outputs["pred_boxes"]  # prediction_boxes.shape = (B, nq, 4)
-
-        # Resize boxes from [0, 1] to original dimension of the image
-        for b in range(B):
-            h, w, _ = source_image[b].shape
-            boxes[b] = boxes[b] * torch.Tensor([w, h, w, h]).to(self.device)
-        boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy")
-        
-        pdb.set_trace()
-
-        # # Tokenize caption
-        # tokenizer = self.model.tokenizer
-        # tokenized = tokenizer(caption)
-
-        # # Separate tokenized into single samples
-        # tokenized_samples = [{} for _ in range(B)]
-        # for key, val in tokenized.items():
-        #     for b in range(B):
-        #         tokenized_samples[b][key] = val[b]
-            
-        # # For each bbox, get the token(s) that corresponds to it
-        # phrases = []
-        # for b in range(B):
-        #     labels = [
-        #         get_phrases_from_posmap(logit > 0.1, tokenized_samples[b], tokenizer).replace('.', '')
-        #         for logit in logits[b]
-        #     ]
-        #     phrases.append(labels)
-
-        # Get max logits to return for each sample i
-        logits = logits.max(dim=2)[0]
-
-        return boxes, logits
-
 
     def save_model(
             self, 
@@ -755,38 +557,17 @@ class myBioViL:
             self.model.load_state_dict(torch.load(ckpt_file, map_location=device))
 
     
-    def preprocess_img(self, image_paths):
-        # Preprocess images
-        images = []
-        for image_path in image_paths:
-            if len(image_path) == 0 or type(image_path) == type(float("nan")):
-                continue
-            img = Image.open(image_path).convert("RGB")
-            img = np.array(img)
-            img = remap_to_uint8(img)
-            img = Image.fromarray(img).convert("L")
-            img = self.transform(img).to(self.device)
-            images.append(img)
-        images = torch.stack(images)
-
-        print("in biovil")
-        pdb.set_trace()
-        return images
-
-    
-    def get_local_img_emb(self, image_paths):
+    def get_local_img_emb(self, images):
         """Get localized image embedding for BioViL."""
-        images = self.preprocess_img(image_paths)
-
         img_embedding = self.model.image_inference_engine.get_patchwise_projected_embeddings(
             images, normalize=True
         )
         return img_embedding
     
     
-    def get_img_emb(self, image_paths):
+    def get_img_emb(self, images):
         """Get global image embedding for BioViL."""
-        img_embedding = self.get_local_img_emb(image_paths)
+        img_embedding = self.get_local_img_emb(images)
         img_embedding = torch.mean(img_embedding, dim=(1,2))
         return img_embedding
     
@@ -815,7 +596,25 @@ class UnitTest:
             "This is a image a 2 lungs.",
             "This patient has symptom of pneumonia.",
         ]
-    
+
+        # Load dataloader - new
+        h5_file_pascal = "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/data/pascal.h5"
+        self.pascal_dataloader = load_pascal(batch_size=16, h5_file=h5_file_pascal, num_workers=4)
+
+    def get_prompt(self, labels):
+        """Get prompt for Grounding Dino.
+        
+        Args:
+            - labels: dict of {phrase: label} pairs.
+        
+        Returns:
+            - prompt: string of prompt.
+        """
+        keys = list(labels.keys())
+        prompt = ""
+        for key in keys:
+            prompt += key + " . "
+        return prompt.strip()
     
     def test_grounding_dino(self):
         # Load model
@@ -838,23 +637,27 @@ class UnitTest:
         print("Test grounding dino: SUCCESS!")
 
     
-    def test_grounding_dino_predict(self):
+    def test_grounding_dino_inference(self):
         # Load model
         grounding_dino = myGroundingDino()
-        IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg", "./initial_experiments/toy_data/chest_x_ray.jpeg"]
-        TEXT_PROMPT = ["2 dogs . kennels .", "2 lungs ."]
-        BOX_TRESHOLD = 0.35
-        TEXT_TRESHOLD = 0.25
+        BOX_TRESHOLD = 0.05
+        TEXT_TRESHOLD = 0.05
+
+        data = next(iter(self.pascal_dataloader))
+        images = data["image_gd"].to(self.device)
+        original_img_size = data["original_img_size"]
+        prompts = [self.get_prompt(item) for item in data["labels"]]
 
         # Get predicted bbox
-        boxes, logits, phrases = grounding_dino.inference(
-            image_path=IMAGE_PATH,
-            caption=TEXT_PROMPT,
+        boxes, logits = grounding_dino.inference(
+            image=images,
+            caption=prompts,
+            original_img_size=original_img_size,
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
         )
-        print(boxes, logits, phrases)
         print("Test grounding dino predict: SUCCESS!")
+        pdb.set_trace()
 
 
     def test_grounding_dino_forward(self):
@@ -961,7 +764,7 @@ if __name__ == "__main__":
     # Grounding DINO
     # unit_test.test_grounding_dino()
     # unit_test.test_grounding_dino_forward()
-    unit_test.test_grounding_dino_predict()
+    unit_test.test_grounding_dino_inference()
     # unit_test.test_grounding_dino_save()
 
     # # Biomed CLIP
