@@ -191,19 +191,19 @@ if __name__ == "__main__":
     # pascal_image_paths = get_image_paths_pascal(root=pascal_root)
     # img_to_hdf5_general(pascal_image_paths, h5_path_pascal)
 
-    # # CheXlocalize
-    # json_path = "datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"
-    # img_dir = "datasets/chexlocalize/CheXpert/test/"
-    # h5_path_chexlocalize = './initial_experiments/data/chexlocalize.h5'
-    # chexlocalize_image_paths = get_image_paths_chexlocalize(json_path, img_dir)
-    # img_to_hdf5_general(chexlocalize_image_paths, h5_path_chexlocalize)
-
-    # PASCAL VAL
-    val_ids_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/val.txt'
-    img_dir = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages/'
-    h5_path_pascal_val = './initial_experiments/data/pascal_val.h5'
-    pascal_image_paths = get_image_paths_pascal_val(val_ids_path, img_dir)
-    img_to_hdf5_general(pascal_image_paths, h5_path_pascal_val)
+    # CheXlocalize
+    json_path = "datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"
+    img_dir = "datasets/chexlocalize/CheXpert/test/"
+    h5_path_chexlocalize = './initial_experiments/data/chexlocalize.h5'
+    chexlocalize_image_paths = get_image_paths_chexlocalize(json_path, img_dir)
+    img_to_hdf5_general(chexlocalize_image_paths, h5_path_chexlocalize)
+    
+    # # PASCAL VAL
+    # val_ids_path = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/ImageSets/Segmentation/val.txt'
+    # img_dir = '/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/pascal/VOCdevkit/VOC2012/JPEGImages/'
+    # h5_path_pascal_val = './initial_experiments/data/pascal_val.h5'
+    # pascal_image_paths = get_image_paths_pascal_val(val_ids_path, img_dir)
+    # img_to_hdf5_general(pascal_image_paths, h5_path_pascal_val)
 
     # filter_h5()
 

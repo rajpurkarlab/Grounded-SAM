@@ -92,13 +92,13 @@ class myGroundingDino:
         """
         # Convert tensor to nested tensor
         images = nested_tensor_from_tensor_list(images).to(self.device)
-        return None, images.to(self.device)
+        return images.to(self.device)
     
 
-    def get_img_emb(self, image_path):
+    def get_img_emb(self, images):
         """Get image embedding for Grounding Dino."""
         # Preprocess
-        _, img = self.preprocess_img(image_path)
+        img = self.preprocess_img(images)
 
         # Run backbone
         backbone_output, _ = self.model.backbone(img)
@@ -160,6 +160,7 @@ class myGroundingDino:
         original_img_size,
         box_threshold,
         text_threshold,
+        train_mode=False,
     ):
         """Open-vocabulary phrase grounding using Grounding Dino during inference.
 
@@ -198,6 +199,8 @@ class myGroundingDino:
         boxes, logits = [], []
         for b in range(B):
             mask = prediction_logits[b].max(dim=1)[0] > box_threshold
+            if mask.sum() == 0: # if no box is above threshold, take the highest confidence box
+                mask = prediction_logits[b].max(dim=1)[0] == prediction_logits[b].max(dim=1)[0].max()
             boxes.append(prediction_boxes[b][mask])
             logits.append(prediction_logits[b][mask])
         
@@ -211,52 +214,75 @@ class myGroundingDino:
             for b in range(B):
                 tokenized_samples[b][key] = val[b]
 
-        # Copied from GD predict codebase, return a list (image-level) of list (object-level) of phrases
+        # Get the phrases for each box
         PHRASES = []
+        LOGITS = []
+        BOXES = boxes
         for b in range(B):
-            sep_idx = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
+            # Get separate indices based on [CLS], [SEP], and . (period)
+            sep_indices = [i for i in range(len(tokenized_samples[b]['input_ids'])) if tokenized_samples[b]['input_ids'][i] in [101, 102, 1012]]
+
+            # Get phrases
+            phrases = {}
+            for i in range(len(sep_indices) - 2): # the last one is the period
+                start_idx = sep_indices[i] + 1
+                end_idx = sep_indices[i+1]
+                decoded_phrase = tokenizer.decode(tokenized_samples[b]['input_ids'][start_idx : end_idx])
+                for j in range(start_idx, end_idx):
+                    phrases[j] = decoded_phrase
             
-            phrases = []
+            # Get logits for each phrase
+            temp_logit, temp_phrase = [], []
             for logit in logits[b]:
-                max_idx = logit.argmax()
-                insert_idx = bisect.bisect_left(sep_idx, max_idx)
-                right_idx = sep_idx[insert_idx]
-                left_idx = sep_idx[insert_idx - 1]
-                phrases.append(get_phrases_from_posmap(logit > text_threshold, tokenized_samples[b], tokenizer, left_idx, right_idx).replace('.', ''))
-            PHRASES.append(phrases)
+                max_logit, max_idx = logit.max(dim=0)
+                max_idx = max_idx.item()
+                temp_logit.append(max_logit)
+                temp_phrase.append(phrases[max_idx])
+            LOGITS.append(torch.stack(temp_logit))
+            PHRASES.append(temp_phrase)
 
-        # Filter for the highest confidence box for each phrase
-        new_boxes = []
-        new_logits = []
+        # Group bbox and logits for each phrase
+        output_boxes, output_logits = [], []
         for b in range(B):
-            # Remove empty phrases
-            phrases = [string for index, string in enumerate(PHRASES[b]) if string != ""]
-            
-            bbs = [] # max logit box - shape: (num_phrases, 4)
-            lls = [] # the logit for the max logit box - shape: (num_phrases, 256)
-            # Get the max-logit box for each phrase in the caption
-            for text_prompt in caption[b].split("."):
-                text_prompt = text_prompt.strip()
-                if text_prompt:
-                    f = [index for index, string in enumerate(PHRASES[b]) if string in text_prompt]
-                    try:
-                        mask = logits[b][f].max(dim=1)[0] == logits[b][f].max(dim=1)[0].max(dim=0)[0] # mask.shape = (B, n)
-                        bbs.append(boxes[b][f][mask])
-                        lls.append(logits[b][f][mask])
-                    except: # when no box corresponding to a certain phrase
-                        bbs.append(torch.zeros((1,4), device='cuda'))
-                        lls.append(torch.zeros((1,256), device='cuda'))
-            new_boxes.append(torch.cat(bbs, dim=0))
-            new_logits.append(torch.cat(lls, dim=0))     
-        
-        # During evaluation, we only have one image
-        if B == 1: 
-            boxes = torch.stack(new_boxes)
-            logits = torch.stack(new_logits)
-            logits = torch.stack([logit.max(dim=1)[0] for logit in logits])
-            return boxes, logits
+            prompts = [text_prompt.strip() for text_prompt in caption[b].split(".")][:-1]
+            temp_box, temp_logit = [[] for _ in range(len(prompts))], [[] for _ in range(len(prompts))]
 
-        return new_boxes, [logit.max(dim=1)[0] for logit in new_logits]
+            for index, string in enumerate(PHRASES[b]):
+                # Get corresponding index in prompts
+                for i, item in enumerate(prompts):
+                    if item == string:
+                        idx = i
+                        break
+
+                temp_box[idx].append(BOXES[b][index])
+                temp_logit[idx].append(LOGITS[b][index])
+            
+            output_boxes.append(temp_box)
+            output_logits.append(temp_logit)
+
+        # Sanity check for empty phrases
+        for b in range(B):
+            for p in range(len(output_boxes[b])):
+                if len(output_logits[b][p]) == 0:
+                    output_boxes[b][p].append(torch.zeros((4), device='cuda'))
+                    output_logits[b][p].append(torch.tensor(0.0, device='cuda'))
+            output_boxes[b] = [torch.stack(item) for item in output_boxes[b]]
+            output_logits[b] = [torch.stack(item) for item in output_logits[b]]
+
+        if train_mode:
+            return output_boxes, output_logits
+        else:
+            # Filter for the highest confidence box for each phrase
+            best_boxes, best_logits = [[] for _ in range(B)], [[] for _ in range(B)]
+            for b in range(B):
+                for p, logit in enumerate(output_logits[b]):
+                    max_logit, max_idx = logit.max(dim=0)
+                    max_idx = max_idx.item()
+                    best_boxes[b].append(output_boxes[b][p][max_idx])
+                    best_logits[b].append(max_logit)
+                best_boxes[b] = torch.stack(best_boxes[b])
+                best_logits[b] = torch.stack(best_logits[b])
+            return best_boxes, best_logits
         
 
     def save_model(
@@ -598,7 +624,7 @@ class UnitTest:
         ]
 
         # Load dataloader - new
-        h5_file_pascal = "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/data/pascal.h5"
+        h5_file_pascal = "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/data/pascal_train.h5"
         self.pascal_dataloader = load_pascal(batch_size=16, h5_file=h5_file_pascal, num_workers=4)
 
     def get_prompt(self, labels):
@@ -656,25 +682,7 @@ class UnitTest:
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
         )
-        print("Test grounding dino predict: SUCCESS!")
-        pdb.set_trace()
-
-
-    def test_grounding_dino_forward(self):
-        # Load model
-        grounding_dino = myGroundingDino()
-        IMAGE_PATH = ["./initial_experiments/toy_data/cat_dog.jpeg", "./initial_experiments/toy_data/chest_x_ray.jpeg"]
-        TEXT_PROMPT = ["2 dogs . kennels .", "2 lungs ."]
-        BOX_TRESHOLD = 0.35
-        TEXT_TRESHOLD = 0.25
-
-        # Get predicted bbox
-        boxes, logits = grounding_dino.forward(
-            image_path=IMAGE_PATH,
-            caption=TEXT_PROMPT,
-        )
-        print(boxes, logits)
-        print("Test grounding dino forward: SUCCESS!")
+        print("Test grounding dino inference: SUCCESS!")
 
 
     def test_grounding_dino_save(self):
@@ -763,7 +771,6 @@ if __name__ == "__main__":
     
     # Grounding DINO
     # unit_test.test_grounding_dino()
-    # unit_test.test_grounding_dino_forward()
     unit_test.test_grounding_dino_inference()
     # unit_test.test_grounding_dino_save()
 

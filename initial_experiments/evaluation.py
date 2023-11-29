@@ -228,24 +228,32 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
         image_gd = torch.from_numpy(image_gd).unsqueeze(0).to("cuda")
 
         # Get predicted bbox
-        boxes, _ = groundingdino.inference(
+        boxes, logits = groundingdino.inference(
             image=image_gd,
             caption=[prompt],
             original_img_size=[original_img_size],
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
+            train_mode=True,
         )
         boxes=boxes[0]
+        logits=logits[0]
 
         # Compute IoU for each phrase
         for i, phrase in enumerate(keys):
             gt_mask = gt_masks[i]
             bbox = boxes[i].type(torch.int64).cpu().numpy()
+            logit = logits[i].detach().cpu().numpy()
 
             # Optimized iou computation between prediction bbox and gt_mask
-            iou_score = compute_iou_optimized(bbox, gt_mask)
+            iou_score, best_box_idx = 0.0, -1
+            for box_idx, bbox_single in enumerate(bbox):
+                iou_score = max(iou_score, compute_iou_optimized(bbox_single, gt_mask))
             iou_results[phrase.title()].append(iou_score)
-        
+            print(idx, phrase, iou_score)
+            print(f"image idx: {idx}, phrase: {phrase}, iou: {iou_score}", "logit of best iou box: ", logit[best_box_idx], "best logits: ", max(logit))
+            pdb.set_trace()
+            
     # Compute and print pathology-specific mIoUs
     total_sum = 0
     total_count = 0
@@ -315,8 +323,24 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
     else:
         raise NameError(f"Model {model_name} not supported")
 
-    # Load CheXlocalize test set
+    # Specify image_paths in the order saved in h5 file
+    h5_file = './initial_experiments/data/chexlocalize.h5'
+    json_path = "datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"
+    json_obj = json.load(open(json_path))
+    image_paths = []
+    for obj in json_obj:
+        image_path = "test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
+        image_paths.append(image_path)
+
+    # Get testing labels and match the order of df to the order of image_paths to use h5 file
     df = pd.read_csv("datasets/chexlocalize/CheXpert/test_labels.csv")
+    mask = df['Path'].isin(image_paths)
+    filtered_df = df[mask]
+    filtered_df['temp_sorting'] = filtered_df['Path'].apply(lambda x: image_paths.index(x))
+    filtered_df = filtered_df.sort_values('temp_sorting').drop('temp_sorting', axis=1).reset_index(drop=True)
+    df = filtered_df
+
+    # Specify the classes we are interested
     classes = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Pleural Effusion"]
     gt_results = {prompt: [] for prompt in classes}
     pred_results = {prompt: [] for prompt in classes}
@@ -347,8 +371,17 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
     for i, row in tqdm(df.iterrows()):
         filename = "datasets/chexlocalize/CheXpert/" + row['Path']
 
+        with h5py.File(h5_file,'r') as h5f:
+            # Get processed images
+            if model_name == "grounded-sam":
+                image = h5f['img_gd'][i]
+            elif model_name == "biovil":
+                image = h5f['img_biovil'][i]
+        image = torch.from_numpy(image).unsqueeze(0).to("cuda")
+        
         # Get image embedding 
-        img_embedding = model.get_img_emb([filename])
+        # img_embedding = model.get_img_emb([filename]) # for CheXzero and BiomedCLIP
+        img_embedding = model.get_img_emb(image)
         if model_name == "grounded-sam":
             img_embedding = model.align_img_emb(img_embedding)
         img_embedding = img_embedding / img_embedding.norm(dim=-1, keepdim=True)
@@ -371,11 +404,6 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
             
             sum_pred = np.exp(pos_logits) + np.exp(neg_logits)
             prob = np.exp(pos_logits) / sum_pred
-            
-            # pos_score = torch.matmul(img_embedding, txt_embeddings[query].T).detach().cpu()
-            # neg_score = torch.matmul(img_embedding, neg_txt_embeddings[query].T).detach().cpu()
-            # inner_product = torch.cat([pos_score, neg_score], dim=1)
-            # prob = F.softmax(inner_product, dim=1)[:,0].item()
 
             # Append to results
             gt_results[query].append(gt_label)
@@ -406,8 +434,8 @@ class UnitTest:
         # print("Starting Grounded-SAM, CheXlocalize...")
         # print("Grounded-SAM, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
         
-        print("Starting Grounded-SAM, PASCAL...")
-        print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
+        # print("Starting Grounded-SAM, PASCAL...")
+        # print("Grounded-SAM, PASCAL: ", eval_results("pascal", "grounded-sam", use_sam=False))
         
         # print(eval_results("chexlocalize", "grounded-sam"))
         # print("Grounded-SAM, CheXlocalize adaptation only - 303: ", eval_results("chexlocalize", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_303.pth"))
@@ -416,8 +444,11 @@ class UnitTest:
 
         # print("Grounded-SAM, PASCAL - 6565: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_6565.pth"))
         
-        # print("Starting GD, CheXlocalize...")
-        # print("GD, CheXlocalize: ", eval_results("chexlocalize", "grounded-sam", use_sam=False))
+        print("Starting GD, CheXlocalize...")
+        print("GD, CheXlocalize: ", eval_results(
+            "chexlocalize", "grounded-sam", use_sam=False,
+            ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_10010.pth",
+        ))
         
         # print("Starting BioViL, CheXlocalize, GRADCAM=True...")
         # print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))
@@ -432,9 +463,9 @@ class UnitTest:
         # print("Grounded-SAM, CheXpert: ", eval_results(
         #     dataset = "chexpert", 
         #     model = "grounded-sam",
-        #     ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth", 
-        #     ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
-        #     ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
+        #     ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19019.pth", 
+        #     ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19019.pth",
+        #     ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19019.pth",
         # ))
 
         # print("Starting BiomedCLIP, CheXpert...")

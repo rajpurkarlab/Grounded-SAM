@@ -63,6 +63,7 @@ def train(hyperparams):
     lambda_img_txt = hyperparams['lambda_img_txt']
     lambda_adaptation = hyperparams['lambda_adaptation']
     lambda_classif = hyperparams['lambda_classif']
+    iou_thres = hyperparams['iou_thres']
     num_epochs = hyperparams['num_epochs']
     num_workers = hyperparams['num_workers']
     save_every = hyperparams['save_every']
@@ -148,9 +149,9 @@ def train(hyperparams):
             
             # Compute detection loss
             if i % log_image_every == 0:
-                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, viz=True, log_to_wandb=log_to_wandb)
+                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, iou_thres=iou_thres, viz=True, log_to_wandb=log_to_wandb)
             else:
-                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
+                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, iou_thres=iou_thres)
             
             # # start_time = time.time()
             # loss_classif = classification_loss(data, my_groundingdino, batch_size_seg)
@@ -211,18 +212,18 @@ def train(hyperparams):
 
                 iou_chex = eval_results("chexlocalize", "grounded-sam", save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth")
 
-                # auc_chexpert = eval_results(
-                #     "chexpert", "grounded-sam",
-                #     ckpt_file = save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth", 
-                #     ckpt_img_linear = save_folder + f"initial_experiments_groundingdino_img_linear_{i}.pth",
-                #     ckpt_txt_linear = save_folder + f"initial_experiments_groundingdino_txt_linear_{i}.pth",
-                # )
+                auc_chexpert = eval_results(
+                    "chexpert", "grounded-sam",
+                    ckpt_file = save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth", 
+                    ckpt_img_linear = save_folder + f"initial_experiments_groundingdino_img_linear_{i}.pth",
+                    ckpt_txt_linear = save_folder + f"initial_experiments_groundingdino_txt_linear_{i}.pth",
+                )
 
                 if log_to_wandb:
                     wandb.log({
                         "val/iou_pascal": iou_pascal, 
                         "val/iou_chex": iou_chex,
-                        # "val/auc_chexpert": auc_chexpert,
+                        "val/auc_chexpert": auc_chexpert,
                         })
 
     # Finish wandb session
@@ -380,7 +381,8 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
         prompts, 
         original_img_size,
         box_threshold=0.05,
-        text_threshold=0.05
+        text_threshold=0.05,
+        train_mode=True,
     )
 
     for b in range(B):
@@ -389,7 +391,7 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
             gt_bboxs_target = torch.tensor(labels[b][p], device='cuda')
 
             # Compute IoU between each pred_bbox and each gt_bbox
-            ious = ops.box_iou(pred_bboxs[b][i].unsqueeze(0), gt_bboxs_target)
+            ious = ops.box_iou(pred_bboxs[b][i], gt_bboxs_target)
             ious, gt_indices = ious.max(dim=1) # max iou overlap for each predicted bbox
 
             # Compute binary classification loss
@@ -397,23 +399,26 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
             if gt_label.sum() == 0: # Pick top prediction if no box > threshold
                 max_iou, max_idx = ious.max(dim=0)
                 gt_label[max_idx] = 1
-            obj_loss = obj_loss_fn(logits[b][i].unsqueeze(0), gt_label.float())
+            obj_loss = obj_loss_fn(logits[b][i], gt_label.float())
 
             # Comput regression loss
             gt_bboxs_target = gt_bboxs_target[gt_indices]
-            giou_loss = ops.generalized_box_iou_loss(gt_bboxs_target, pred_bboxs[b][i].unsqueeze(0), reduction="none")
-            l1_loss = l1_loss_fn(gt_bboxs_target, pred_bboxs[b][i].unsqueeze(0)).mean(dim=1) / 256 # normalize by image size
+            giou_loss = ops.generalized_box_iou_loss(gt_bboxs_target, pred_bboxs[b][i], reduction="none")
+            l1_loss = l1_loss_fn(gt_bboxs_target, pred_bboxs[b][i]).mean(dim=1) / 256 # normalize by image size
             reg_loss = (gt_label.float() * (2.0 * giou_loss + 5.0 * l1_loss)).sum() / gt_label.sum()
 
             # Compute total loss
             total_loss += 2.0 * obj_loss + reg_loss
-    
-
+        
     if viz:
         # Get prediction with highest logits for the last sample
         b = B - 1
-        bbox = pred_bboxs[b][-1]
-        bbox2 = gt_bboxs_target[0]
+        logit = logits[b][-1]
+        max_logit, max_idx = logit.max(dim=0)
+        logit_str = str(max_logit.tolist())[:4]
+
+        bbox = pred_bboxs[b][-1][max_idx]
+        bbox2 = gt_bboxs_target[max_idx]
 
         # Draw on image
         img = cv2.imread(image_paths[b])
@@ -421,7 +426,6 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
         cv2.rectangle(img, (int(bbox2[0]), int(bbox2[1])), (int(bbox2[2]), int(bbox2[3])), color=(0,255,0), thickness=4) # green for gt
         
         # Save and log
-        logit_str = str(logits[b][0].tolist())[:4]
         cv2.imwrite(f"./initial_experiments/images/{prompts[b]}_{logit_str}_step_{step}.jpg", img)
         if log_to_wandb:
             images = wandb.Image(
@@ -431,7 +435,6 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
             wandb.log({"pascal_images": images})
 
     return total_loss / B
-
 
 
 def save_viz_chexlocalize(my_groundingdino, step, log_to_wandb=False):
@@ -457,7 +460,7 @@ def save_viz_chexlocalize(my_groundingdino, step, log_to_wandb=False):
                 break
     
     # Predict bounding box
-    pred_bboxs, logits = my_groundingdino.inference(image_gd, [query], [original_img_size], box_threshold=0.01, text_threshold=0.01)
+    pred_bboxs, logits = my_groundingdino.inference(image_gd, [query], [original_img_size], box_threshold=0.05, text_threshold=0.05, train_mode=False)
     bbox = pred_bboxs[0][0]
     
     # Draw predicted bbox
@@ -575,6 +578,7 @@ class UnitTest:
             "lambda_img_txt": 2,
             "lambda_adaptation": 1,
             "lambda_classif": 1,
+            "iou_thres": 0.3,
             "num_epochs": 3,
             "num_workers": 4,
             "use_sam": False,
