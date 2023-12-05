@@ -150,33 +150,6 @@ def preprocess_biovil(config_file='hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vi
     return transform
 
 
-def filter_h5():
-    print("Filtering problematic entries...")
-    
-    with h5py.File('./initial_experiments/data/mimic_small.h5', 'r') as h5f:
-        # Identify indices of non-problematic entries
-        valid_indices = []
-        for idx in tqdm(range(len(h5f['cxr_gd']))):  # Assuming all datasets have the same length
-            try:
-                if h5f['cxr_gd'][idx].size > 0 and h5f['cxr_biovil'][idx].size > 0 \
-                   and h5f['report'][idx].size > 0 and h5f['image_path'][idx].size > 0:
-                    valid_indices.append(idx)
-            except Exception as e:
-                pass  # Skip adding this index if there's an error
-
-    # Create a new HDF5 file with filtered data
-    print("Saving filtered data to h5...")
-    with h5py.File('./initial_experiments/data/mimic_small_filtered.h5', 'w') as h5f_new:
-        with h5py.File('./initial_experiments/data/mimic_small.h5', 'r') as h5f_old:
-            # Iterate over datasets
-            for dset_name in ['cxr_gd', 'cxr_biovil', 'report', 'image_path']:
-                # Read data for valid indices
-                data = [h5f_old[dset_name][i] for i in valid_indices]
-                
-                # Create new dataset in new file
-                h5f_new.create_dataset(dset_name, data=data)
-
-
 if __name__ == "__main__":
     # # MIMIC
     # cvs_path = '/n/data1/hms/dbmi/rajpurkar/lab/CXR-ReDonE/data/mimic_train_impressions.csv'

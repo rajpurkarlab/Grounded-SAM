@@ -142,27 +142,30 @@ def train(hyperparams):
                 data, my_groundingdino, my_biovil, my_sam, on_dataset="mimic"
             )
 
-            # Compute adaptation loss on pascal data (source domain)
-            groundingdino_img_loss_s, groundingdino_txt_loss_s, groundingdino_img_txt_loss_s, sam_img_loss_s = compute_adaptation_loss(
-                next(pascal_dataloader_iter), my_groundingdino, my_biovil, my_sam, on_dataset="pascal"
-            )
+            # # Compute adaptation loss on pascal data (source domain)
+            # groundingdino_img_loss_s, groundingdino_txt_loss_s, groundingdino_img_txt_loss_s, sam_img_loss_s = compute_adaptation_loss(
+            #     next(pascal_dataloader_iter), my_groundingdino, my_biovil, my_sam, on_dataset="pascal"
+            # )
             
-            # Compute detection loss
-            if i % log_image_every == 0:
-                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, iou_thres=iou_thres, viz=True, log_to_wandb=log_to_wandb)
-            else:
-                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, iou_thres=iou_thres)
+            # # Compute detection loss
+            # if i % log_image_every == 0:
+            #     loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, iou_thres=iou_thres, viz=True, log_to_wandb=log_to_wandb)
+            # else:
+            #     loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, iou_thres=iou_thres)
             
             # # start_time = time.time()
             # loss_classif = classification_loss(data, my_groundingdino, batch_size_seg)
             # end_time = time.time()
             # # print(f'Time taken: {end_time - start_time} seconds')
+
+            loss = groundingdino_img_txt_loss
+            print(loss)
             
-            loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss ) \
-                        + lambda_img_txt * (groundingdino_img_txt_loss ) \
-                        + lambda_detection * loss_detection \
-                        + lambda_adaptation * (groundingdino_img_loss_s + groundingdino_txt_loss_s ) \
-                        + lambda_img_txt * (groundingdino_img_txt_loss_s ) \
+            # loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss ) \
+            #             + lambda_img_txt * (groundingdino_img_txt_loss ) \
+            #             + lambda_detection * loss_detection \
+                        # + lambda_adaptation * (groundingdino_img_loss_s + groundingdino_txt_loss_s ) \
+                        # + lambda_img_txt * (groundingdino_img_txt_loss_s ) \
                         #   + lambda_classif * loss_classif 
             
             if i % log_image_every == 0:
@@ -176,10 +179,10 @@ def train(hyperparams):
                     "train/groundingdino_txt_loss": groundingdino_txt_loss,
                     "train/groundingdino_img_txt_loss": groundingdino_img_txt_loss,
                     # "train/classif_loss": loss_classif,
-                    "train/groundingdino_img_loss_s": groundingdino_img_loss_s,
-                    "train/groundingdino_txt_loss_s": groundingdino_txt_loss_s,
-                    "train/groundingdino_img_txt_loss_s": groundingdino_img_txt_loss_s,
-                    "train/loss_detection": loss_detection,
+                    # "train/groundingdino_img_loss_s": groundingdino_img_loss_s,
+                    # "train/groundingdino_txt_loss_s": groundingdino_txt_loss_s,
+                    # "train/groundingdino_img_txt_loss_s": groundingdino_img_txt_loss_s,
+                    # "train/loss_detection": loss_detection,
                     "train/learning_rate": scheduler.get_last_lr()[0],
                 })
             
@@ -203,14 +206,14 @@ def train(hyperparams):
                         img_linear_ckpt=f"initial_experiments_sam_img_linear_{i}.pth",
                     )
 
-                # Evaluation
-                iou_pascal = eval_results(
-                    "pascal", 
-                    "grounded-sam", 
-                    save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth"
-                )
+                # # Evaluation
+                # iou_pascal = eval_results(
+                #     "pascal", 
+                #     "grounded-sam", 
+                #     save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth"
+                # )
 
-                iou_chex = eval_results("chexlocalize", "grounded-sam", save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth")
+                # iou_chex = eval_results("chexlocalize", "grounded-sam", save_folder + f"initial_experiments_groundingdino_backbone_{i}.pth")
 
                 auc_chexpert = eval_results(
                     "chexpert", "grounded-sam",
@@ -221,8 +224,8 @@ def train(hyperparams):
 
                 if log_to_wandb:
                     wandb.log({
-                        "val/iou_pascal": iou_pascal, 
-                        "val/iou_chex": iou_chex,
+                        # "val/iou_pascal": iou_pascal, 
+                        # "val/iou_chex": iou_chex,
                         "val/auc_chexpert": auc_chexpert,
                         })
 
@@ -254,9 +257,11 @@ def compute_adaptation_loss(data, my_groundingdino, my_biovil, my_sam, on_datase
         reports = [get_prompt(item) for item in data["labels"]]
 
     # Get embeddings
-    groundingdino_img_emb = my_groundingdino.get_img_emb(image_gd)
+    with torch.no_grad():
+        groundingdino_img_emb = my_groundingdino.get_img_emb(image_gd)
     groundingdino_img_emb = my_groundingdino.align_img_emb(groundingdino_img_emb)
-    groundingdino_txt_emb = my_groundingdino.get_txt_emb(reports)
+    with torch.no_grad():
+        groundingdino_txt_emb = my_groundingdino.get_txt_emb(reports)
     groundingdino_txt_emb = my_groundingdino.align_txt_emb(groundingdino_txt_emb)
 
     with torch.no_grad(): # medical model is frozen
@@ -409,6 +414,7 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
 
             # Compute total loss
             total_loss += 2.0 * obj_loss + reg_loss
+            pdb.set_trace()
         
     if viz:
         # Get prediction with highest logits for the last sample
@@ -570,23 +576,23 @@ class UnitTest:
     def run_training(self):
         hyperparams = {
             "lr": 1e-4,
-            "batch_size_adaptation": 16,
-            "batch_size_segmentation": 16,
+            "batch_size_adaptation": 32,
+            "batch_size_segmentation": 32,
             "h5_file_mimic": "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/data/mimic.h5",
             "h5_file_pascal": "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/data/pascal_train.h5",
-            "lambda_detection": 8,
-            "lambda_img_txt": 2,
+            "lambda_detection": 1,
+            "lambda_img_txt": 1,
             "lambda_adaptation": 1,
             "lambda_classif": 1,
-            "iou_thres": 0.3,
-            "num_epochs": 3,
-            "num_workers": 4,
+            "iou_thres": 0.5,
+            "num_epochs": 1,
+            "num_workers": 8,
             "use_sam": False,
-            "save_every": 1000,
+            "save_every": 500,
             "log_image_every": 100,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
-            "log_to_wandb": True,
+            "log_to_wandb": False,
         }
         train(hyperparams)
         

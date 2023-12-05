@@ -125,6 +125,7 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
             original_img_size=[original_img_size],
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
+            eval=True
         )
         
         boxes=boxes[0]
@@ -234,7 +235,7 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
             original_img_size=[original_img_size],
             box_threshold=BOX_TRESHOLD,
             text_threshold=TEXT_TRESHOLD,
-            train_mode=True,
+            eval=True
         )
         boxes=boxes[0]
         logits=logits[0]
@@ -246,13 +247,15 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
             logit = logits[i].detach().cpu().numpy()
 
             # Optimized iou computation between prediction bbox and gt_mask
-            iou_score, best_box_idx = 0.0, -1
-            for box_idx, bbox_single in enumerate(bbox):
-                iou_score = max(iou_score, compute_iou_optimized(bbox_single, gt_mask))
+            # iou_score, best_box_idx = 0.0, -1
+            # for box_idx, bbox_single in enumerate(bbox):
+            #     iou_score = max(iou_score, compute_iou_optimized(bbox_single, gt_mask))
+            iou_score = compute_iou_optimized(bbox, gt_mask)
             iou_results[phrase.title()].append(iou_score)
             print(idx, phrase, iou_score)
-            print(f"image idx: {idx}, phrase: {phrase}, iou: {iou_score}", "logit of best iou box: ", logit[best_box_idx], "best logits: ", max(logit))
-            pdb.set_trace()
+            # print(idx, phrase, iou_score)
+            # print(f"image idx: {idx}, phrase: {phrase}, iou: {iou_score}", "logit of best iou box: ", logit[best_box_idx], "best logits: ", max(logit))
+            # pdb.set_trace()
             
     # Compute and print pathology-specific mIoUs
     total_sum = 0
@@ -444,11 +447,11 @@ class UnitTest:
 
         # print("Grounded-SAM, PASCAL - 6565: ", eval_results("pascal", "grounded-sam", "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_6565.pth"))
         
-        print("Starting GD, CheXlocalize...")
-        print("GD, CheXlocalize: ", eval_results(
-            "chexlocalize", "grounded-sam", use_sam=False,
-            ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_10010.pth",
-        ))
+        # print("Starting GD, CheXlocalize...")
+        # print("GD, CheXlocalize: ", eval_results(
+        #     "chexlocalize", "grounded-sam", use_sam=False,
+        #     ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_10010.pth",
+        # ))
         
         # print("Starting BioViL, CheXlocalize, GRADCAM=True...")
         # print("BioViL, CheXlocalize, GRADCAM=True: ", eval_results("chexlocalize", "biovil", GRADCAM=True))
@@ -459,14 +462,14 @@ class UnitTest:
         # print("Starting BioViL, PASCAL, GRADCAM=True...")
         # print("BioViL, PASCAL, GRADCAM=True: ", eval_results("pascal", "biovil", GRADCAM=True))
 
-        # print("Starting Grounded-SAM, CheXpert...")
-        # print("Grounded-SAM, CheXpert: ", eval_results(
-        #     dataset = "chexpert", 
-        #     model = "grounded-sam",
-        #     ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19019.pth", 
-        #     ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19019.pth",
-        #     ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19019.pth",
-        # ))
+        print("Starting Grounded-SAM, CheXpert...")
+        print("Grounded-SAM, CheXpert: ", eval_results(
+            dataset = "chexpert", 
+            model = "grounded-sam",
+            # ckpt_file = "./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_1001.pth", 
+            # ckpt_img_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_1001.pth",
+            # ckpt_txt_linear = "./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_1001.pth",
+        ))
 
         # print("Starting BiomedCLIP, CheXpert...")
         # print("BiomedCLIP, CheXpert: ", eval_results(
