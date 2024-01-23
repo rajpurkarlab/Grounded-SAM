@@ -26,9 +26,6 @@ from models.GroundingDINO.groundingdino.models.GroundingDINO.bertwarper import g
 from models.GroundingDINO.groundingdino.util.inference import load_model, preprocess_caption
 from groundingdino.util.utils import get_phrases_from_posmap
 
-# Load CheXzero
-from models.chexzero import load_chexzero_and_transform
-import models.CheXzero.clip as clip
 from models.biovil import load_biovil_and_transform, remap_to_uint8
 
 from linear_probe import LinearProbe
@@ -651,85 +648,6 @@ class mySAM:
         torch.save(self.img_linear.state_dict(), ckpt_folder + img_linear_ckpt)
 
 
-class myCheXzero:
-    
-    def __init__(
-        self,
-        ckpt_file=None,
-        device="cuda",
-    ):
-        """CheXZero - model(image encoder, text encoder).
-        """
-        # Load CheXZero
-        self.model, self.preprocess_image = load_chexzero_and_transform()
-        self.model.to(device)
-        self.device = device
-
-        # Load checkpoint
-        if ckpt_file:
-            self.model.load_state_dict(torch.load(ckpt_file, map_location=device))
-
-    
-    def preprocess_img(self, image_paths, desired_size=224):
-        # Preprocess images
-        images = []
-        for image_path in image_paths:
-            img = cv2.imread(str(image_path))
-            # convert to PIL Image object
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(img)
-            # preprocess
-            # img = preprocess(img_pil, desired_size=resolution)  
-            
-            old_size = img.size
-            # prcint(old_size)
-            ratio = float(desired_size)/max(old_size)
-            new_size = tuple([int(x*ratio) for x in old_size])
-            img = img.resize(new_size, Image.LANCZOS)
-            # create a new image and paste the resized on it
-
-            new_img = Image.new('L', (desired_size, desired_size))
-            new_img.paste(img, ((desired_size-new_size[0])//2,
-                                (desired_size-new_size[1])//2))
-            
-            img = new_img
-            
-            img = img.convert("RGB")
-            # img = self.preprocess_image(img).to(self.device)
-            img = torchvision.transforms.ToTensor()(img).to(self.device)
-            images.append(img)
-        images = torch.stack(images)
-        return images
-
-    
-    def preprocess_txt(self, caption):
-        return clip.tokenize(caption, context_length=77).to(self.device)
-    
-    
-    def get_img_emb(self, image_paths):
-        """Get image embedding for CheXZero."""
-        images = self.preprocess_img(image_paths)
-        img_embedding = self.model.encode_image(images)
-        return img_embedding
-    
-
-    def get_txt_emb(self, caption):
-        """Get text embedding for CheXZero."""
-        caption = self.preprocess_txt(caption)
-        txt_embedding = self.model.encode_text(caption)
-        # txt_embedding = txt_embedding / txt_embedding.norm(dim=-1, keepdim=True)
-        return txt_embedding
-
-    
-    def predict(self, image_paths, caption):
-        # Preprocess
-        images = self.preprocess_img(image_paths)
-        caption = self.preprocess_txt(caption)        
-
-        # Run model
-        logits_per_image, logits_per_text = self.model(images, caption)
-        return logits_per_image, logits_per_text
-
 
 class myBioViL:
     
@@ -923,15 +841,7 @@ class UnitTest:
         bmc = myBiomedCLIP(ckpt_file="./initial_experiments/ckpts/biomedclip.pth")
 
 
-    def test_chexzero_predict(self):
-        # Load model
-        chexzero = myCheXzero()
-
-        # Generate embedding
-        logits_per_image, logits_per_text = chexzero.predict(self.img_path, self.text)
-        print(logits_per_image.shape, logits_per_text.shape)
-        print("Test chexzero predict: SUCCESS!")
-
+   
 
     def test_biovil(self):
         # Load model

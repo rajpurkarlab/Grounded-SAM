@@ -50,7 +50,7 @@ if torch.cuda.is_available():
 def train(hyperparams):
     """Train the model."""
     
-    print("BOTH LOSSES, BIOVIL\n\n")
+    print("ADAPT ONLY, BIOVIL\n\n")
 
     # Load hyperparameters
     lr = hyperparams['lr']
@@ -91,8 +91,8 @@ def train(hyperparams):
     # Load model
     my_groundingdino = myGroundingDino(
         d=128,
-        config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
-        ckpt_file="./initial_experiments/ckpts/groundingdino_swint_ogc.pth",
+        config_file="/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
+        ckpt_file="/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/initial_experiments/ckpts/groundingdino_swint_ogc.pth",
         # ckpt_file="./initial_experiments/ckpts/initial_experiments_groundingdino_backbone_19695.pth",
         # img_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_img_linear_19695.pth",
         # txt_linear_ckpt="./initial_experiments/ckpts/initial_experiments_groundingdino_txt_linear_19695.pth",
@@ -152,10 +152,10 @@ def train(hyperparams):
             
             # Compute detection loss
             # start_time = time.time()
-            if i % log_image_every == 0:
-                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, viz=True, log_to_wandb=log_to_wandb)
-            else:
-                loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
+            # if i % log_image_every == 0:
+            #     loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i, viz=True, log_to_wandb=log_to_wandb)
+            # else:
+            #     loss_detection = compute_detection_loss(next(pascal_dataloader_iter), my_groundingdino, step=i)
             # end_time = time.time()
             # print(f'Time taken: {end_time - start_time} seconds')
             
@@ -168,11 +168,11 @@ def train(hyperparams):
             #groundingdino_img_txt_loss_s
             loss = lambda_adaptation * (groundingdino_img_loss + groundingdino_txt_loss ) \
                           + lambda_img_txt * (groundingdino_img_txt_loss ) \
-                          + lambda_detection * loss_detection \
-                          + lambda_classif * loss_classif
+                        #   + lambda_detection * loss_detection \
+                        #   + lambda_classif * loss_classif
             
-            if i % log_image_every == 0:
-                save_viz(my_groundingdino, step=i, log_to_wandb=log_to_wandb)
+            # if i % log_image_every == 0:
+            #     save_viz(my_groundingdino, step=i, log_to_wandb=log_to_wandb)
             
             # Log to wandb
             if log_to_wandb:
@@ -181,11 +181,11 @@ def train(hyperparams):
                     "train/groundingdino_img_loss": groundingdino_img_loss,
                     "train/groundingdino_txt_loss": groundingdino_txt_loss,
                     "train/groundingdino_img_txt_loss": groundingdino_img_txt_loss,
-                    "train/classif_loss": loss_classif,
+                    # "train/classif_loss": loss_classif,
                     # "train/groundingdino_img_loss_s": groundingdino_img_loss_s,
                     # "train/groundingdino_txt_loss_s": groundingdino_txt_loss_s,
                     # "train/groundingdino_img_txt_loss_s": groundingdino_img_txt_loss_s,
-                    "train/loss_detection": loss_detection,
+                    # "train/loss_detection": loss_detection,
                     "train/learning_rate": scheduler.get_last_lr()[0],
                 })
             
@@ -450,10 +450,10 @@ def compute_detection_loss(data, my_groundingdino, step, iou_thres=0.8, viz=Fals
 def save_viz(my_groundingdino, step, log_to_wandb=False):
     """Visualization for CheXlocalize."""
     # Randomly choose an image
-    json_obj = json.load(open("datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"))
+    json_obj = json.load(open("/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"))
     b = random.randint(0, len(json_obj)-1)
     obj = list(json_obj.keys())[b]
-    filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
+    filename = "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
     image_paths = [filename]
     
     # Choose a disease
@@ -591,7 +591,7 @@ class UnitTest:
             "log_image_every": 20,
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             "save_folder": "./initial_experiments/ckpts/",
-            "log_to_wandb": False,
+            "log_to_wandb": True,
         }
         train(hyperparams)
         

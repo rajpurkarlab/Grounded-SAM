@@ -34,7 +34,7 @@ from models.grounded_sam import run_grounded_sam, env_setup, load_models
 from models.baselines import run_biovil
 from segment_anything import build_sam_vit_h, build_sam_vit_l, SamPredictor
 
-from model import myGroundingDino, myBiomedCLIP, mySAM, myCheXzero, myBioViL
+from model import myGroundingDino, myBiomedCLIP, mySAM, myBioViL
 
 
 def eval_results(
@@ -79,12 +79,7 @@ def eval_pascal(model, GRADCAM, ckpt_file, use_sam=False):
             config_file="./initial_experiments/ckpts/GroundingDINO_SwinT_OGC.py",
             ckpt_file=ckpt_file,
         )
-        groundingdino_model = groundingdino.model
-
-        sam = build_sam_vit_l(
-            checkpoint="./initial_experiments/ckpts/sam_vit_l_0b3195.pth"
-        ).to("cuda")
-        sam_predictor = SamPredictor(sam)
+        
     elif model == "biovil":
         pass
     else:
@@ -176,12 +171,12 @@ def eval_chexlocalize(model, GRADCAM, ckpt_file, use_sam=False):
         raise NotImplementedError(f"Model {model} not supported")
 
     # Load CheXlocalize test set
-    json_obj = json.load(open("datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"))
+    json_obj = json.load(open("/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/chexlocalize/CheXlocalize/gt_segmentations_test.json"))
 
     iou_results = {prompt: [] for prompt in PROMPTS}
     # Loop through all test samples (pathology, image, ground-truth mask) tuples
     for obj in tqdm(json_obj):
-        filename = "datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
+        filename = "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/chexlocalize/CheXpert/test/" + obj.replace("_", "/", (obj.count('_')-1)) + ".jpg"
 
         curr_time = time.time()
         
@@ -294,15 +289,13 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
         )
     elif model_name == "biomed-clip":
         model = myBiomedCLIP()
-    elif model_name == "chexzero":
-        model = myCheXzero()
     elif model_name == "biovil":
         model = myBioViL()
     else:
         raise NameError(f"Model {model_name} not supported")
 
     # Load CheXlocalize test set
-    df = pd.read_csv("datasets/chexlocalize/CheXpert/test_labels.csv")
+    df = pd.read_csv("/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/chexlocalize/CheXpert/test_labels.csv")
     classes = ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Pleural Effusion"]
     gt_results = {prompt: [] for prompt in classes}
     pred_results = {prompt: [] for prompt in classes}
@@ -331,7 +324,7 @@ def eval_chexpert(model_name, ckpt_file, ckpt_img_linear, ckpt_txt_linear):
     
     # Loop through all test samples (pathology, image, ground-truth mask) tuples
     for i, row in tqdm(df.iterrows()):
-        filename = "datasets/chexlocalize/CheXpert/" + row['Path']
+        filename = "/n/data1/hms/dbmi/rajpurkar/lab/Grounded-SAM/datasets/chexlocalize/CheXpert/" + row['Path']
 
         # Get image embedding 
         img_embedding = model.get_img_emb([filename])
@@ -429,11 +422,6 @@ class UnitTest:
         #     model = "biomed-clip",
         # ))
 
-        # print("Starting CheXzero, CheXpert...")
-        # print("CheXzero, CheXpert: ", eval_results(
-        #     dataset = "chexpert", 
-        #     model = "chexzero",
-        # ))
 
         # print("Starting BioViL, CheXpert...")
         # print("BioViL, CheXpert: ", eval_results(
@@ -452,13 +440,11 @@ def displace_results():
     groundingdino_190k = json.load(open('./chexpert_grounding_dino_19k_1020.json'))
     biomedclip_baseline = json.load(open('./chexpert_biomed_clip_baseline.json'))
     biovil_baseline = json.load(open('./chexpert_biovil_baseline.json'))
-    chexzero_baseline = json.load(open('./chexpert_chexzero_baseline.json'))
 
     # Display results in a table
     df = pd.DataFrame({
         "BiomedCLIP (baseline)": biomedclip_baseline,
         "BioViL (baseline)": biovil_baseline,
-        "CheXzero (baseline)": chexzero_baseline,
         "GroundingDINO (baseline)": groundingdino_baseline,
         "GroundingDINO (19k)": groundingdino_190k,
     })
